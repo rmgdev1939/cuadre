@@ -140,11 +140,28 @@
           <span id="tasa-eur-fecha" class="tasa-sec-fecha"></span>
         </div>
         <div class="tasa-secundaria">
-          <span class="etiqueta">Paralelo / Binance</span>
+          <span class="etiqueta">Binance · USDT</span>
           <span id="tasa-paralelo" class="tasa-sec-valor">—</span>
           <span id="tasa-paralelo-fecha" class="tasa-sec-fecha"></span>
         </div>
       </div>
+      <div class="tasas-auto">
+        <span id="tasas-estado" class="tasas-estado" role="status"></span>
+        <button id="actualizar-tasas" type="button" class="boton boton-terciario boton-chico">Actualizar</button>
+      </div>
+    </section>
+
+    <!-- Productos para vender con un toque (aparece cuando hay inventario) -->
+    <section id="rejilla" class="tarjeta rejilla" aria-labelledby="rejilla-titulo" hidden>
+      <div class="pos-cabecera">
+        <h2 id="rejilla-titulo" class="subtitulo">Productos</h2>
+        <button id="rejilla-inventario" type="button" class="boton boton-editar">Editar</button>
+      </div>
+      <label class="campo-texto rejilla-buscar" hidden>
+        <span class="visualmente-oculto">Buscar producto</span>
+        <input id="rejilla-buscar" type="search" autocomplete="off" placeholder="Buscar producto">
+      </label>
+      <ul id="rejilla-lista" class="rejilla-lista"></ul>
     </section>
 
     <!-- Calculadora de pagos mixtos -->
@@ -242,6 +259,22 @@
       </div>
       <dl id="recibo-detalle" class="recibo-detalle"></dl>
       <button id="recibo-verificar" type="button" class="boton boton-terciario" aria-haspopup="dialog" hidden>Verificar con el SMS del banco</button>
+      <!-- Factura PDF del cliente: se envía por correo o se omite -->
+      <div id="factura" class="factura">
+        <div class="factura-cabecera">
+          <span class="etiqueta">Factura en PDF para el cliente</span>
+          <button id="factura-omitir" type="button" class="boton boton-terciario boton-chico">Omitir</button>
+        </div>
+        <label class="campo-texto">
+          <span class="etiqueta">Correo del cliente</span>
+          <input id="factura-correo" type="email" inputmode="email" autocomplete="off" maxlength="120" placeholder="cliente@correo.com">
+        </label>
+        <div class="factura-botones">
+          <button id="factura-enviar" type="button" class="boton boton-primario">Enviar por correo</button>
+          <button id="factura-ver" type="button" class="boton boton-terciario">Ver PDF</button>
+        </div>
+        <p id="factura-mensaje" class="recibo-nota" role="status" hidden></p>
+      </div>
       <a id="enviar-whatsapp" class="boton boton-whatsapp" href="#" target="_blank" rel="noopener">Enviar por WhatsApp</a>
       <p id="recibo-nota" class="recibo-nota" hidden>Sin conexión: el mensaje se enviará cuando WhatsApp tenga internet.</p>
       <button id="nueva-venta" type="button" class="boton boton-terciario">Nueva venta</button>
@@ -362,6 +395,19 @@
     <div class="modal-cuerpo">
       <form id="inv-form" class="inv-form" novalidate>
         <span id="inv-form-titulo" class="etiqueta">Nuevo producto</span>
+        <div class="inv-foto">
+          <div class="inv-foto-marco">
+            <img id="inv-foto-vista" alt="Foto del producto" hidden>
+            <span id="inv-foto-vacio" class="logo-vacio">Sin foto</span>
+          </div>
+          <div class="logo-botones">
+            <label class="boton boton-terciario boton-archivo">
+              Tomar o elegir foto
+              <input id="inv-foto" type="file" accept="image/*" class="visualmente-oculto">
+            </label>
+            <button id="inv-foto-quitar" type="button" class="boton boton-terciario" hidden>Quitar foto</button>
+          </div>
+        </div>
         <label class="campo-texto">
           <span class="etiqueta">Nombre</span>
           <input id="inv-nombre" type="text" maxlength="60" autocomplete="off" placeholder="Ej. Harina PAN 1 kg">
@@ -694,7 +740,7 @@
       <div class="modal-cabecera">
         <div>
           <h2 id="tasas-titulo" class="subtitulo">Editar tasas</h2>
-          <p class="modal-nota">Escribe solo las que cambiaron. Se guarda la fecha y hora de cada cambio.</p>
+          <p class="modal-nota">Cuadre las busca solas en internet. Escribe una solo si quieres corregirla.</p>
         </div>
         <button id="tasas-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar">✕</button>
       </div>
@@ -708,7 +754,7 @@
           <input id="tasa-eur-input" type="text" inputmode="decimal" autocomplete="off" placeholder="Ej. 39,80">
         </label>
         <label class="campo-texto">
-          <span class="etiqueta">Tasa Paralelo / Binance</span>
+          <span class="etiqueta">Tasa Binance · USDT</span>
           <input id="tasa-paralelo-input" type="text" inputmode="decimal" autocomplete="off" placeholder="Ej. 42,10">
         </label>
         <p id="tasas-mensaje" class="aviso" role="alert"></p>
@@ -722,6 +768,8 @@
 
   <script src="db.js" defer></script>
   <script src="pagomovil.js" defer></script>
+  <script src="tasasauto.js" defer></script>
+  <script src="factura.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

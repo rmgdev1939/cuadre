@@ -90,16 +90,25 @@
   function mostrarTasa() {
     if (estado.tasa) {
       poner(el.tasaActual, fmtTasa.format(estado.tasa.valor));
-      poner(el.tasaFecha, 'Actualizada: ' + fmtFecha.format(new Date(estado.tasa.fecha)));
+      poner(el.tasaFecha, origenTasa(estado.tasa, 'bcv'));
     } else {
       poner(el.tasaActual, 'Sin tasa');
-      poner(el.tasaFecha, 'Toca «Editar Tasas» para ingresar la tasa BCV del día');
+      poner(el.tasaFecha, 'Conéctate a internet o toca «Editar Tasas» para escribir la tasa BCV del día');
     }
     [['eur', el.tasaEur, el.tasaEurFecha], ['paralelo', el.tasaParalelo, el.tasaParaleloFecha]].forEach(function (x) {
       var t = estado.tasasRef[x[0]];
-      poner(x[1], t ? 'Bs ' + fmtTasa.format(t.valor) : '—');
-      poner(x[2], t ? fmtFechaCorta.format(new Date(t.fecha)) : 'Sin registrar');
+      poner(x[1], t ? 'Bs ' + fmtMonto.format(t.valor) : '—');
+      poner(x[2], origenTasa(t, x[0]));
     });
+  }
+
+
+  /** De dónde salió la tasa y de cuándo es: "DolarAPI · vigente 03/10" o "Manual · 03/10 09:15". */
+  function origenTasa(t, tipo) {
+    if (!t) return 'Sin registrar';
+    if (!t.fuente) return 'Manual · ' + fmtFechaCorta.format(new Date(t.fecha));
+    var f = new Date(t.fechaFuente || t.fecha);
+    return t.fuente + ' · ' + (tipo === 'paralelo' ? fmtFechaCorta.format(f) : 'vigente ' + fmtDiaMes.format(f));
   }
 
   /** [tipo, input] de cada tasa en el diálogo Editar Tasas. */
@@ -172,6 +181,83 @@
     }).then(function () {
       el.tasaGuardar.disabled = false;
     });
+  }
+
+  // ---------- Tasas automáticas ----------
+  // Se buscan solas al abrir la app, al volver a ella y al recuperar internet (como mucho cada 30 min).
+  // Son sugerencias: una tasa corregida a mano se respeta hasta que la fuente publique una más nueva.
+  // Sin internet o si la fuente falla, se queda la última guardada y se sigue cobrando.
+  var CLAVE_CONSULTA = 'cuadre-tasas-consulta';
+  var CONSULTA_CADA_MS = 30 * 60 * 1000;
+  var buscandoTasas = false;
+
+  function ultimaConsulta() {
+    try { return Number(localStorage.getItem(CLAVE_CONSULTA)) || 0; } catch (e) { return 0; }
+  }
+
+  function anotarConsulta(ms) {
+    try { localStorage.setItem(CLAVE_CONSULTA, String(ms)); } catch (e) { /* sin almacenamiento */ }
+  }
+
+  function textoConsulta() {
+    var u = ultimaConsulta();
+    return u ? 'Consultadas: ' + fmtHora.format(new Date(u)) : '';
+  }
+
+  function estadoTasas(texto) { poner(el.tasasEstado, texto || ''); }
+
+  function debeReemplazar(actual, nueva) {
+    if (!actual) return true;
+    if (actual.fuente) return actual.valor !== nueva.valor || actual.fechaFuente !== nueva.fechaFuente;
+    return !!nueva.fechaFuente && Date.parse(nueva.fechaFuente) > Date.parse(actual.fecha);
+  }
+
+  function actualizarTasasSolas(forzar) {
+    if (!window.CuadreTasas || buscandoTasas) return Promise.resolve();
+    if (!navigator.onLine) {
+      estadoTasas('Sin conexión: se usan las últimas tasas guardadas.');
+      return Promise.resolve();
+    }
+    if (!forzar && Date.now() - ultimaConsulta() < CONSULTA_CADA_MS) {
+      estadoTasas(textoConsulta());
+      return Promise.resolve();
+    }
+    buscandoTasas = true;
+    if (el.actualizarTasas) el.actualizarTasas.disabled = true;
+    estadoTasas('Buscando las tasas del día…');
+    var nombres = { bcv: 'BCV dólar', eur: 'BCV euro', paralelo: 'Binance' };
+    return window.CuadreTasas.buscar().then(function (r) {
+      var tipos = Object.keys(nombres);
+      var llegaron = tipos.filter(function (t) { return r[t]; });
+      var cambian = llegaron.filter(function (t) { return debeReemplazar(tasaGuardada(t), r[t]); });
+      return Promise.all(cambian.map(function (t) {
+        return DB.guardarTasa(r[t].valor, t, { fuente: r[t].fuente, fechaFuente: r[t].fechaFuente }).then(function (g) {
+          if (t === 'bcv') estado.tasa = g; else estado.tasasRef[t] = g;
+        });
+      })).then(function () {
+        if (!llegaron.length) {
+          estadoTasas('No se pudieron consultar las tasas: se usan las últimas guardadas.');
+          return;
+        }
+        anotarConsulta(Date.now());
+        var faltan = tipos.filter(function (t) { return !r[t]; }).map(function (t) { return nombres[t]; });
+        estadoTasas(textoConsulta() + (faltan.length ? ' · Sin respuesta: ' + faltan.join(', ') : ''));
+        mostrarTasa();
+        recalcular();
+        llenarTasaRegistro();
+      });
+    }).catch(function (e) {
+      console.warn(e);
+      estadoTasas('No se pudieron consultar las tasas: se usan las últimas guardadas.');
+    }).then(function () {
+      buscandoTasas = false;
+      if (el.actualizarTasas) el.actualizarTasas.disabled = false;
+    });
+  }
+
+  /** En el registro, la tasa BCV ya viene puesta si se pudo consultar. */
+  function llenarTasaRegistro() {
+    if (el.registroTasa && !el.registroTasa.value && estado.tasa) el.registroTasa.value = fmtTasa.format(estado.tasa.valor);
   }
 
   // ---------- Ajustes del comercio (marca y tema) ----------
@@ -711,6 +797,7 @@
     }).then(function (guardada) {
       limpiarFormulario();
       mostrarRecibo(Object.assign(venta, guardada));
+      if (venta.items) refrescarCatalogo();
       return renderVentas();
     }).catch(function (e) {
       console.error(e);
@@ -1051,7 +1138,7 @@
       ['Tasa BCV', 'Bs ' + fmtTasa.format(v.tasa) + ' por USD']
     );
     if (v.tasaEur) lineas.push(['Tasa EUR', 'Bs ' + fmtTasa.format(v.tasaEur) + ' por EUR']);
-    if (v.tasaParalelo) lineas.push(['Tasa Paralelo', 'Bs ' + fmtTasa.format(v.tasaParalelo) + ' por USD']);
+    if (v.tasaParalelo) lineas.push(['Tasa Binance', 'Bs ' + fmtTasa.format(v.tasaParalelo) + ' por USDT']);
     lineas.push(['Total en Bs', bs(d.totalBs)]);
     if (d.efectivo > 0) lineas.push(['Pagado en USD (efectivo)', usd(d.efectivo)]);
     if (d.restanteBs > 0) lineas.push(['Pagado en Bs (' + NOMBRE_CANAL[d.canal] + ')', bs(d.restanteBs)]);
@@ -1105,10 +1192,137 @@
     poner(el.reciboMetodo, NOMBRE_METODO[metodo] || '');
     el.reciboMetodo.setAttribute('data-metodo', metodo);
     el.whatsapp.href = enlaceWhatsApp(v);
+    if (el.factura && (!estado.facturaDe || estado.facturaDe !== v.id)) {
+      estado.facturaDe = v.id;
+      el.factura.hidden = false;
+      el.facturaCorreo.value = v.correo || '';
+      mensajeFactura('');
+    }
     actualizarConexion();
     el.recibo.hidden = false;
     // En teléfono, lleva el recibo a la vista para que el botón de WhatsApp quede a mano.
     if (!sinDesplazar && el.recibo.scrollIntoView) el.recibo.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // ---------- Factura PDF ----------
+  function mensajeFactura(texto) {
+    if (!el.facturaMensaje) return;
+    el.facturaMensaje.textContent = texto || '';
+    el.facturaMensaje.hidden = !texto;
+  }
+
+  function numeroFactura(v) { return ('000000' + v.id).slice(-6); }
+
+  /** Lo que lleva la factura de una venta, ya en texto. */
+  function datosFactura(v, correo) {
+    var d = desglose(v), c = estado.comercio;
+    var css = getComputedStyle(document.documentElement);
+    var colores = c.tema === 'logo' && c.colores ? c.colores : null;
+    var items = (v.items || []).map(function (it) {
+      return {
+        nombre: it.nombre, cantidad: fmtCantidad(it.cantidad), precio: usd(cent(it.precioUsd)),
+        importe: usd(Math.round(cent(it.precioUsd) * it.cantidad))
+      };
+    });
+    if (!items.length) items.push({ nombre: 'Venta', cantidad: '1', precio: usd(d.totalUsd), importe: usd(d.totalUsd) });
+    var pagos = [];
+    if (d.efectivo > 0) pagos.push(['Efectivo USD', usd(d.efectivo)]);
+    if (d.restanteBs > 0) pagos.push([NOMBRE_CANAL[d.canal], bs(d.restanteBs)]);
+    if (d.restanteBs > 0 && d.canal === 'pago-movil' && (v.refBanco || v.referencia)) pagos.push(['Referencia', v.refBanco || v.referencia]);
+    if (d.vueltoUsd > 0) pagos.push(['Vuelto entregado', usd(d.vueltoUsd)]);
+    return {
+      numero: numeroFactura(v),
+      fecha: fmtFechaRecibo.format(new Date(v.fecha)),
+      cliente: correo || '',
+      comercio: {
+        nombre: c.nombre, contacto: c.contacto, logo: c.logo,
+        color: (colores && colores.primario) || css.getPropertyValue('--primario').trim() || '#047857',
+        colorSuave: (colores && colores.primarioSuave) || css.getPropertyValue('--primario-suave').trim() || '#d1fae5'
+      },
+      items: items,
+      totales: [
+        ['Tasa BCV', 'Bs ' + fmtTasa.format(v.tasa) + ' por USD'],
+        ['Total en Bs', bs(d.totalBs)],
+        ['Total USD', usd(d.totalUsd), true]
+      ],
+      pagos: pagos,
+      pie: 'Documento sin validez fiscal · Hecho con Cuadre'
+    };
+  }
+
+  function pdfFactura(v, correo) {
+    if (!window.CuadreFactura) return Promise.reject(new Error('Sin generador de PDF'));
+    return window.CuadreFactura.crear(datosFactura(v, correo)).then(function (blob) {
+      var nombre = 'Factura-' + numeroFactura(v) + '.pdf';
+      try { return new File([blob], nombre, { type: 'application/pdf' }); } catch (e) { blob.name = nombre; return blob; }
+    });
+  }
+
+  function verFactura() {
+    var v = estado.recibo;
+    if (!v) return;
+    // La ventana se abre antes de armar el PDF para que el navegador no la bloquee.
+    var ventana = window.open('', '_blank');
+    pdfFactura(v, el.facturaCorreo.value.trim()).then(function (archivo) {
+      var url = URL.createObjectURL(archivo);
+      if (ventana) ventana.location.href = url; else descargar(archivo);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+    }).catch(function (e) {
+      if (ventana) ventana.close();
+      console.error(e);
+      mensajeFactura('No se pudo crear el PDF. Intenta de nuevo.');
+    });
+  }
+
+  function correoValido(t) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(t); }
+
+  /**
+   * Sin servidor no se puede mandar el correo directamente: se abre la app de correo del teléfono
+   * con el PDF adjunto (menú de compartir). El correo del cliente queda copiado para pegarlo en «Para».
+   * Donde no se puede compartir archivos, se descarga el PDF y se abre un correo ya dirigido al cliente.
+   */
+  function enviarFactura() {
+    var v = estado.recibo;
+    if (!v) return;
+    var correo = el.facturaCorreo.value.trim();
+    if (!correoValido(correo)) {
+      el.facturaCorreo.setAttribute('aria-invalid', 'true');
+      el.facturaCorreo.focus();
+      mensajeFactura('Escribe el correo del cliente, por ejemplo cliente@gmail.com.');
+      return;
+    }
+    el.facturaCorreo.removeAttribute('aria-invalid');
+    var c = estado.comercio;
+    var asunto = 'Factura N.º ' + numeroFactura(v) + (c.nombre ? ' · ' + c.nombre : '');
+    var cuerpo = 'Hola, adjuntamos la factura de su compra por ' + usd(desglose(v).totalUsd) + '. ¡Gracias por su compra!';
+    el.facturaEnviar.disabled = true;
+    pdfFactura(v, correo).then(function (archivo) {
+      DB.anotarCorreo(v.id, correo).then(function () { v.correo = correo; }, function (e) { console.warn(e); });
+      if (navigator.canShare && navigator.share && navigator.canShare({ files: [archivo] })) {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(correo).catch(function () {});
+        mensajeFactura('Elige tu app de correo. El correo del cliente quedó copiado: pégalo en «Para».');
+        return navigator.share({ files: [archivo], title: asunto, text: cuerpo }).then(function () {
+          mensajeFactura('Factura lista en tu app de correo para ' + correo + '.');
+        }, function (e) {
+          if (e && e.name === 'AbortError') mensajeFactura('No se envió. Puedes intentarlo de nuevo.');
+          else throw e;
+        });
+      }
+      descargar(archivo);
+      location.href = 'mailto:' + encodeURIComponent(correo) + '?subject=' + encodeURIComponent(asunto) +
+        '&body=' + encodeURIComponent(cuerpo);
+      mensajeFactura('Se descargó el PDF y se abrió un correo para ' + correo + ': adjunta el PDF antes de enviar.');
+    }).catch(function (e) {
+      console.error(e);
+      mensajeFactura('No se pudo preparar la factura. Intenta de nuevo.');
+    }).then(function () {
+      el.facturaEnviar.disabled = false;
+    });
+  }
+
+  function omitirFactura() {
+    el.factura.hidden = true;
+    mensajeFactura('');
   }
 
   function ocultarRecibo() {
@@ -1267,6 +1481,7 @@
       if (estado.recibo && estado.recibo.id === id) ocultarRecibo();
       ventaPorAnular = null;
       el.anular.close();
+      refrescarCatalogo();
       return renderVentas();
     }).catch(function (e) {
       console.error(e);
@@ -1726,6 +1941,7 @@
     if (vista === 'resumen') pintarDashboard();
     if (vista === 'ajustes') abrirAjustes();
     if (vista === 'inventario') cargarCatalogo().then(function () { pintarInventario(); nuevoProducto(); });
+    if (vista === 'caja') refrescarCatalogo();
   }
 
   // ---------- Cuenta local: PIN y sesión ----------
@@ -1828,6 +2044,7 @@
       return;
     }
     irA('registro');
+    llenarTasaRegistro();
   }
 
   // ---------- Registro inicial ----------
@@ -1878,6 +2095,8 @@
     el.registroCrear.disabled = true;
     datosPin(pin).then(function (p) {
       Object.assign(cambios, p);
+      // Si es la misma que llegó sola, se conserva su fuente.
+      if (estado.tasa && Math.abs(estado.tasa.valor - tasa) < 1e-9) return estado.tasa;
       return DB.guardarTasa(tasa, 'bcv');
     }).then(function (t) {
       estado.tasa = t;
@@ -1946,6 +2165,7 @@
       estado.entrada.total = (c % 100 === 0) ? String(c / 100) : (c / 100).toFixed(2);
     }
     if (el.totalUsd) el.totalUsd.closest('.campo-caja').toggleAttribute('data-bloqueado', items.length > 0);
+    pintarRejilla();
   }
 
   function cargarCatalogo() {
@@ -2054,6 +2274,103 @@
     recalcular();
   }
 
+  // ---------- Productos en la Caja (un toque suma) ----------
+  /** Iniciales para el cuadro de un producto sin foto: "Harina PAN" → "HP". */
+  function iniciales(nombre) {
+    var p = String(nombre || '').trim().split(/\s+/).filter(Boolean);
+    return ((p[0] || '?').charAt(0) + (p[1] ? p[1].charAt(0) : '')).toUpperCase();
+  }
+
+  function pintarRejilla() {
+    if (!el.rejilla) return;
+    var hay = estado.catalogo.length > 0;
+    el.rejilla.hidden = !hay;
+    el.abrirProductos.hidden = hay;
+    if (!hay) return;
+    var buscar = el.rejillaBuscar.closest('label');
+    buscar.hidden = estado.catalogo.length < 9;
+    var q = buscar.hidden ? '' : el.rejillaBuscar.value.trim().toLowerCase();
+    var lista = estado.catalogo.filter(function (p) { return !q || p.nombre.toLowerCase().indexOf(q) !== -1; });
+    el.rejillaLista.innerHTML = '';
+    lista.forEach(function (p) {
+      var cant = estado.carrito[p.id] || 0;
+      var li = document.createElement('li');
+      li.className = 'tile' + (cant ? ' tile-elegido' : '');
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tile-boton';
+      b.setAttribute('data-sumar', String(p.id));
+      var foto;
+      if (p.foto) {
+        foto = document.createElement('img');
+        foto.className = 'tile-foto';
+        foto.src = p.foto;
+        foto.alt = '';
+      } else {
+        foto = document.createElement('span');
+        foto.className = 'tile-foto tile-inicial';
+        foto.setAttribute('aria-hidden', 'true');
+        foto.textContent = iniciales(p.nombre);
+      }
+      b.appendChild(foto);
+      var nombre = document.createElement('span');
+      nombre.className = 'tile-nombre';
+      nombre.textContent = p.nombre;
+      var precio = document.createElement('span');
+      precio.className = 'tile-precio';
+      precio.textContent = usd(cent(p.precioUsd));
+      b.appendChild(nombre);
+      b.appendChild(precio);
+      if (p.stock != null) {
+        var stock = document.createElement('span');
+        stock.className = 'tile-stock';
+        var queda = p.stock - cant;
+        stock.textContent = queda <= 0 ? 'Agotado' : 'Quedan ' + fmtCantidad(queda);
+        if (queda <= 0) stock.setAttribute('data-agotado', '');
+        b.appendChild(stock);
+      }
+      b.setAttribute('aria-label', 'Sumar ' + p.nombre + ', ' + usd(cent(p.precioUsd)) + (cant ? '. Llevas ' + fmtCantidad(cant) : ''));
+      li.appendChild(b);
+      if (cant) {
+        var n = document.createElement('span');
+        n.className = 'tile-cantidad';
+        n.textContent = fmtCantidad(cant);
+        var menos = document.createElement('button');
+        menos.type = 'button';
+        menos.className = 'tile-menos';
+        menos.setAttribute('data-restar-tile', String(p.id));
+        menos.setAttribute('aria-label', 'Quitar uno de ' + p.nombre);
+        menos.textContent = '−';
+        li.appendChild(n);
+        li.appendChild(menos);
+      }
+      el.rejillaLista.appendChild(li);
+    });
+    if (!lista.length) {
+      var vacio = document.createElement('li');
+      vacio.className = 'venta-vacia';
+      vacio.textContent = 'Ningún producto coincide.';
+      el.rejillaLista.appendChild(vacio);
+    }
+  }
+
+  function sumarProducto(id, delta) {
+    if (!productoPorId(id)) return;
+    empezarEdicion();
+    var nueva = (estado.carrito[id] || 0) + delta;
+    if (nueva <= 0) delete estado.carrito[id]; else estado.carrito[id] = nueva;
+    if (!hayCarrito()) estado.entrada.total = '';
+    pintarCarrito();
+    if (hayCarrito() && estado.campoActivo === 'total') activarCampo('recibido');
+    if (!hayCarrito()) activarCampo('total');
+    recalcular();
+    vibrar();
+  }
+
+  function refrescarCatalogo() {
+    return cargarCatalogo().then(function () { pintarCarrito(); recalcular(); }).catch(function (e) { console.warn(e); });
+  }
+
   // Editor de inventario
   var productoEditando = null;
   var confirmandoEliminar = false;
@@ -2063,9 +2380,67 @@
     el.invMensaje.hidden = !texto;
   }
 
+  // Foto del producto en edición: undefined = sin cambio, null = quitarla, data URL = nueva.
+  var fotoProducto;
+  var FOTO_PX = 240;
+
+  /** Recorta la imagen al centro en un cuadrado de 240 px (JPEG liviano). */
+  function procesarFoto(archivo) {
+    return new Promise(function (resolve, reject) {
+      if (!archivo || !/^image\//.test(archivo.type)) return reject(new Error('Elige un archivo de imagen.'));
+      if (archivo.size > LOGO_MAX_BYTES) return reject(new Error('La imagen pesa más de 10 MB.'));
+      var url = URL.createObjectURL(archivo);
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var w = img.naturalWidth, h = img.naturalHeight, lado = Math.min(w, h);
+        var c = document.createElement('canvas');
+        c.width = c.height = Math.min(FOTO_PX, lado) || FOTO_PX;
+        var ctx = c.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, (w - lado) / 2, (h - lado) / 2, lado, lado, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.82));
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('No se pudo leer esa imagen.'));
+      };
+      img.src = url;
+    });
+  }
+
+  function pintarFotoInv(src) {
+    if (src) { el.invFotoVista.src = src; el.invFotoVista.hidden = false; }
+    else { el.invFotoVista.removeAttribute('src'); el.invFotoVista.hidden = true; }
+    el.invFotoVacio.hidden = !!src;
+    el.invFotoQuitar.hidden = !src;
+  }
+
+  function elegirFoto() {
+    var archivo = el.invFoto.files && el.invFoto.files[0];
+    if (!archivo) return;
+    procesarFoto(archivo).then(function (dataUrl) {
+      fotoProducto = dataUrl;
+      pintarFotoInv(dataUrl);
+      mensajeInv('');
+    }).catch(function (e) {
+      mensajeInv(e.message);
+    }).then(function () {
+      el.invFoto.value = '';
+    });
+  }
+
+  function quitarFoto() {
+    fotoProducto = null;
+    pintarFotoInv(null);
+  }
+
   function nuevoProducto() {
     productoEditando = null;
     confirmandoEliminar = false;
+    fotoProducto = undefined;
+    pintarFotoInv(null);
     el.invNombre.value = '';
     el.invPrecio.value = '';
     el.invStock.value = '';
@@ -2081,6 +2456,8 @@
     if (!p) return;
     productoEditando = p.id;
     confirmandoEliminar = false;
+    fotoProducto = undefined;
+    pintarFotoInv(p.foto || null);
     el.invNombre.value = p.nombre;
     el.invPrecio.value = fmtMonto.format(p.precioUsd);
     el.invStock.value = p.stock == null ? '' : fmtCantidad(p.stock);
@@ -2110,6 +2487,14 @@
       b.setAttribute('data-editar-producto', String(p.id));
       b.innerHTML = '<span class="producto-nombre"></span><span class="producto-precio"></span><span class="producto-stock"></span>';
       b.children[0].textContent = p.nombre;
+      if (p.foto) {
+        var mini = document.createElement('img');
+        mini.className = 'producto-mini';
+        mini.src = p.foto;
+        mini.alt = '';
+        b.classList.add('con-foto');
+        b.insertBefore(mini, b.firstChild);
+      }
       b.children[1].textContent = usd(cent(p.precioUsd));
       b.children[2].textContent = p.stock == null ? 'Sin control de stock' : textoStock(p);
       if (p.stock != null && p.stock <= 0) b.children[2].setAttribute('data-agotado', '');
@@ -2128,7 +2513,7 @@
     if (!isFinite(precio) || precio <= 0) { mensajeInv('Escribe un precio como 1,20.'); el.invPrecio.focus(); return; }
     if (stockTexto && !isFinite(stock)) { mensajeInv('El stock debe ser un número, o déjalo vacío.'); el.invStock.focus(); return; }
     el.invGuardar.disabled = true;
-    DB.guardarProducto({ id: productoEditando, nombre: el.invNombre.value, precioUsd: precio, stock: stock }).then(function () {
+    DB.guardarProducto({ id: productoEditando, nombre: el.invNombre.value, precioUsd: precio, stock: stock, foto: fotoProducto }).then(function () {
       return cargarCatalogo();
     }).then(function () {
       pintarInventario();
@@ -2432,6 +2817,22 @@
     }
     if (el.productos) {
       el.abrirProductos.addEventListener('click', abrirProductos);
+      el.rejillaLista.addEventListener('click', function (e) {
+        var mas = e.target.closest('[data-sumar]'), menos = e.target.closest('[data-restar-tile]');
+        if (mas) sumarProducto(mas.getAttribute('data-sumar'), 1);
+        else if (menos) sumarProducto(menos.getAttribute('data-restar-tile'), -1);
+      });
+      el.rejillaBuscar.addEventListener('input', pintarRejilla);
+      el.rejillaInventario.addEventListener('click', function () { irA('inventario'); });
+      el.invFoto.addEventListener('change', elegirFoto);
+      el.invFotoQuitar.addEventListener('click', quitarFoto);
+      el.actualizarTasas.addEventListener('click', function () { actualizarTasasSolas(true); });
+      window.addEventListener('online', function () { actualizarTasasSolas(); });
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') actualizarTasasSolas(); });
+      el.facturaEnviar.addEventListener('click', enviarFactura);
+      el.facturaVer.addEventListener('click', verFactura);
+      el.facturaOmitir.addEventListener('click', omitirFactura);
+      el.facturaCorreo.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); enviarFactura(); } });
       el.carritoEditar.addEventListener('click', abrirProductos);
       el.carritoQuitar.addEventListener('click', quitarCarrito);
       el.productosCerrar.addEventListener('click', cerrarProductos);
@@ -2691,6 +3092,22 @@
       invEliminar: $('#inv-eliminar'),
       invGuardar: $('#inv-guardar'),
       invLista: $('#inv-lista'),
+      invFoto: $('#inv-foto'),
+      invFotoVista: $('#inv-foto-vista'),
+      invFotoVacio: $('#inv-foto-vacio'),
+      invFotoQuitar: $('#inv-foto-quitar'),
+      rejilla: $('#rejilla'),
+      rejillaLista: $('#rejilla-lista'),
+      rejillaBuscar: $('#rejilla-buscar'),
+      rejillaInventario: $('#rejilla-inventario'),
+      tasasEstado: $('#tasas-estado'),
+      actualizarTasas: $('#actualizar-tasas'),
+      factura: $('#factura'),
+      facturaCorreo: $('#factura-correo'),
+      facturaEnviar: $('#factura-enviar'),
+      facturaVer: $('#factura-ver'),
+      facturaOmitir: $('#factura-omitir'),
+      facturaMensaje: $('#factura-mensaje'),
       dashboardPeriodo: $('#dashboard-periodo'),
       dashboardPeriodos: $('#dashboard-periodos'),
       dashKpis: $('#dash-kpis'),
@@ -2850,7 +3267,8 @@
         arranque = false;
         mostrarTasa();
         recalcular();
-        return renderVentas();
+        actualizarTasasSolas();
+        return Promise.all([renderVentas(), refrescarCatalogo()]);
       });
   }
 

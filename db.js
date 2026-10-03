@@ -24,7 +24,7 @@
  *       'tasa-paralelo' { clave, valor, fecha }  → tasa Paralelo/Binance (referencia)
  *       'comercio'      { clave, nombre, contacto, logo (data URL Base64 o null), tema,
  *                         pmBanco (código, p. ej. '0134'), pmTelefono, pmDocumento }  → datos de Pago Móvil del comercio
- *       'catalogo'      { clave, sigId, lista: [{ id, nombre, precioUsd, stock (número o null = sin control), activo }] }
+ *       'catalogo'      { clave, sigId, lista: [{ id, nombre, precioUsd, stock (número o null = sin control), activo, foto? }] }
  *                       → inventario. Vender con items descuenta stock en la misma transacción; anular lo devuelve.
  *                         Eliminar un producto solo lo marca activo:false (las ventas viejas conservan su nombre).
  *       'pagos-recibidos' { clave, lista: [{ referencia, montoBs, banco, recibido (ISO), texto, ventaId|null }] }
@@ -135,17 +135,33 @@
     return clave;
   }
 
-  /** Guarda una tasa ('bcv' por defecto, 'eur' o 'paralelo') con la hora del cambio. Devuelve { valor, fecha }. */
-  function guardarTasa(valor, tipo) {
+  /** Copia pública de un registro de tasa. */
+  function tasaPublica(r) {
+    if (!r) return null;
+    var t = { valor: r.valor, fecha: r.fecha };
+    if (r.fuente) { t.fuente = r.fuente; t.fechaFuente = r.fechaFuente || null; }
+    return t;
+  }
+
+  /**
+   * Guarda una tasa ('bcv' por defecto, 'eur' o 'paralelo' = Binance) con la hora del cambio.
+   * `origen` opcional { fuente, fechaFuente } cuando la tasa llegó sola de internet; sin él, es manual.
+   * Devuelve { valor, fecha, fuente?, fechaFuente? }.
+   */
+  function guardarTasa(valor, tipo, origen) {
     var numero = Number(valor);
     if (!isFinite(numero) || numero <= 0) {
       return Promise.reject(new Error('Tasa inválida'));
     }
     var registro = { clave: claveTasa(tipo), valor: numero, fecha: new Date().toISOString() };
+    if (origen && origen.fuente) {
+      registro.fuente = String(origen.fuente).slice(0, 40);
+      registro.fechaFuente = origen.fechaFuente || null;
+    }
     return conStore(STORE_CONFIG, 'readwrite', function (store) {
       return store.put(registro);
     }).then(function () {
-      return { valor: registro.valor, fecha: registro.fecha };
+      return tasaPublica(registro);
     });
   }
 
@@ -155,7 +171,7 @@
     return conStore(STORE_CONFIG, 'readonly', function (store) {
       return store.get(clave);
     }).then(function (r) {
-      return r ? { valor: r.valor, fecha: r.fecha } : null;
+      return tasaPublica(r);
     });
   }
 
@@ -339,7 +355,11 @@
     });
   }
 
-  /** Crea o edita un producto { id?, nombre, precioUsd, stock (número o null) }. Devuelve el producto guardado. */
+  /**
+   * Crea o edita un producto { id?, nombre, precioUsd, stock (número o null), foto? }.
+   * foto: data URL de imagen (JPEG pequeño), null para quitarla, ausente para no tocarla.
+   * Devuelve el producto guardado.
+   */
   function guardarProducto(datos) {
     var nombre = String(datos && datos.nombre || '').trim().slice(0, 60);
     var precio = Math.round(Number(datos && datos.precioUsd) * 100) / 100;
@@ -347,6 +367,9 @@
     if (!nombre) return Promise.reject(new Error('Escribe el nombre del producto.'));
     if (!isFinite(precio) || precio <= 0) return Promise.reject(new Error('Escribe un precio mayor que cero.'));
     if (stock != null && !isFinite(stock)) return Promise.reject(new Error('El stock debe ser un número.'));
+    var foto = datos ? datos.foto : undefined;
+    if (foto != null && !/^data:image\/(jpeg|png|webp);base64,/.test(String(foto))) return Promise.reject(new Error('La foto no es válida.'));
+    if (foto && foto.length > 200000) return Promise.reject(new Error('La foto es demasiado grande.'));
     return conCatalogo(function (cat) {
       var p = datos.id != null ? cat.lista.filter(function (x) { return x.id === Number(datos.id); })[0] : null;
       if (datos.id != null && !p) throw new Error('El producto ya no existe.');
@@ -354,6 +377,7 @@
       p.nombre = nombre;
       p.precioUsd = precio;
       p.stock = stock;
+      if (foto !== undefined) { if (foto) p.foto = foto; else delete p.foto; }
       return Object.assign({}, p);
     });
   }
@@ -407,6 +431,26 @@
           lista.unshift(pago);
           store.put({ clave: CLAVE_PAGOS, lista: lista.slice(0, MAX_PAGOS) });
           salida = { pago: pago, nuevo: true };
+        };
+      });
+    });
+  }
+
+  /** Guarda en la venta el correo al que se envió su factura. Devuelve la venta. */
+  function anotarCorreo(id, correo) {
+    var texto = String(correo || '').trim().slice(0, 120);
+    return abrir().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(STORE_VENTAS, 'readwrite');
+        var store = tx.objectStore(STORE_VENTAS);
+        var venta;
+        tx.oncomplete = function () { resolve(venta); };
+        tx.onerror = tx.onabort = function () { reject(tx.error || new Error('No se pudo guardar el correo')); };
+        store.get(Number(id)).onsuccess = function (e) {
+          venta = e.target.result;
+          if (!venta) return;
+          if (texto) venta.correo = texto; else delete venta.correo;
+          store.put(venta);
         };
       });
     });
@@ -693,6 +737,7 @@
     verificarVenta: verificarVenta,
     obtenerCatalogo: obtenerCatalogo,
     guardarProducto: guardarProducto,
+    anotarCorreo: anotarCorreo,
     eliminarProducto: eliminarProducto,
     exportarRespaldo: exportarRespaldo,
     validarRespaldo: validarRespaldo,
