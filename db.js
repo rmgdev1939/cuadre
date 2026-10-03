@@ -6,17 +6,25 @@
  * Base 'cuadre' v2
  *   - 'ventas' { id (autoIncrement), totalUsd, recibidoUsd, vueltoUsd, vueltoBs, tasa, fecha (ISO), dia ('YYYY-MM-DD' local),
  *                totalBs, efectivoUsd, restanteUsd, restanteBs, metodo ('efectivo' | 'mixto' | 'pago-movil'),
- *                tasaEur, tasaParalelo, cierreId, anuladaEn }
+ *                tasaEur, tasaParalelo, cierreId, anuladaEn,
+ *                canalBs ('pago-movil' | 'punto'), referencia, verificadaEn, verificacion ('sms' | 'manual'), refBanco }
  *       Los campos de la segunda línea llegaron con el pago mixto; las ventas anteriores no los tienen.
  *       tasaEur y tasaParalelo son solo referencia para el recibo (opcionales); los cálculos usan `tasa` (BCV USD).
  *       cierreId solo existe en ventas archivadas por un cierre de caja; sin él, la venta está "abierta".
  *       anuladaEn (ISO) marca una venta anulada: no se borra, pero no suma en los totales. Solo se anulan ventas abiertas.
+ *       canalBs dice cómo se cobraron los Bs (metodo 'punto' = todo por punto de venta). Una venta con
+ *       canalBs 'pago-movil' y restanteBs > 0 queda "por verificar" hasta tener verificadaEn (ISO).
+ *       referencia = lo que escribió el comerciante (p. ej. últimos 6 dígitos); refBanco = la del SMS del banco.
+ *       Las ventas anteriores a esto no tienen canalBs y no se piden verificar.
  *       índice 'dia'
  *   - 'config' { clave, ... }
  *       'tasa'          { clave, valor, fecha }  → tasa BCV USD (la única que usan los cálculos)
  *       'tasa-eur'      { clave, valor, fecha }  → tasa EUR (referencia)
  *       'tasa-paralelo' { clave, valor, fecha }  → tasa Paralelo/Binance (referencia)
- *       'comercio'      { clave, nombre, contacto, logo (data URL Base64 o null), tema }
+ *       'comercio'      { clave, nombre, contacto, logo (data URL Base64 o null), tema,
+ *                         pmBanco (código, p. ej. '0134'), pmTelefono, pmDocumento }  → datos de Pago Móvil del comercio
+ *       'pagos-recibidos' { clave, lista: [{ referencia, montoBs, banco, recibido (ISO), texto, ventaId|null }] }
+ *                       → pagos leídos de los SMS del banco; ventaId = venta que verificaron (cada pago verifica una sola).
  *       Las claves nuevas no requieren cambiar la versión de la base.
  *   - 'cierres' { id (autoIncrement), fecha (ISO), desde, hasta ('YYYY-MM-DD'), ventaIds, cantidad, anuladas, ...totales }  (v2)
  *       ventaIds incluye las ventas anuladas (también se archivan); cantidad y totales solo cuentan las válidas.
@@ -156,7 +164,8 @@
 
   // ---------- Ajustes del comercio ----------
   var TEMAS = ['esmeralda', 'azul', 'naranja', 'oscuro'];
-  var AJUSTES_VACIOS = { nombre: '', contacto: '', logo: null, tema: null };
+  var AJUSTES_VACIOS = { nombre: '', contacto: '', logo: null, tema: null, pmBanco: '', pmTelefono: '', pmDocumento: '' };
+  var CAMPOS_TEXTO = ['nombre', 'contacto', 'pmBanco', 'pmTelefono', 'pmDocumento'];
 
   function normalizarAjustes(r) {
     var a = Object.assign({}, AJUSTES_VACIOS, r || {});
@@ -199,8 +208,7 @@
           registro = Object.assign({}, AJUSTES_VACIOS, e.target.result || {}, permitido, {
             clave: 'comercio', fecha: new Date().toISOString()
           });
-          registro.nombre = String(registro.nombre || '').trim();
-          registro.contacto = String(registro.contacto || '').trim();
+          CAMPOS_TEXTO.forEach(function (k) { registro[k] = String(registro[k] || '').trim(); });
           store.put(registro);
         };
       });
@@ -228,8 +236,105 @@
     ['tasaEur', 'tasaParalelo'].forEach(function (campo) {
       if (venta[campo] != null && Number(venta[campo]) > 0) registro[campo] = Number(venta[campo]);
     });
+    // Pago Móvil / Punto de venta (opcionales).
+    if (venta.canalBs === 'pago-movil' || venta.canalBs === 'punto') registro.canalBs = venta.canalBs;
+    if (venta.referencia) registro.referencia = String(venta.referencia).replace(/\D/g, '').slice(0, 20);
     return conStore(STORE_VENTAS, 'readwrite', function (store) {
       return store.add(registro);
+    });
+  }
+
+  // ---------- Pagos recibidos (SMS del banco) ----------
+  var CLAVE_PAGOS = 'pagos-recibidos';
+  var MAX_PAGOS = 500;
+
+  /** Pagos leídos de SMS, del más reciente al más antiguo. */
+  function pagosRecibidos() {
+    return conStore(STORE_CONFIG, 'readonly', function (store) {
+      return store.get(CLAVE_PAGOS);
+    }).then(function (r) {
+      return (r && Array.isArray(r.lista) ? r.lista : []).slice();
+    });
+  }
+
+  /**
+   * Guarda un pago leído de un SMS { referencia, montoBs (decimal), banco, texto }.
+   * La misma referencia no se guarda dos veces: devuelve { pago, nuevo } con el que ya estaba.
+   */
+  function guardarPagoRecibido(datos) {
+    var referencia = String(datos && datos.referencia || '').replace(/\D/g, '');
+    var monto = Number(datos && datos.montoBs);
+    if (!referencia || !isFinite(monto) || monto <= 0) return Promise.reject(new Error('El pago necesita referencia y monto.'));
+    return abrir().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(STORE_CONFIG, 'readwrite');
+        var store = tx.objectStore(STORE_CONFIG);
+        var salida;
+        tx.oncomplete = function () { resolve(salida); };
+        tx.onerror = function () { reject(tx.error); };
+        tx.onabort = function () { reject(tx.error || new Error('Transacción abortada')); };
+        store.get(CLAVE_PAGOS).onsuccess = function (e) {
+          var lista = (e.target.result && e.target.result.lista) || [];
+          var previo = lista.filter(function (p) { return p.referencia === referencia; })[0];
+          if (previo) { salida = { pago: previo, nuevo: false }; return; }
+          var pago = {
+            referencia: referencia, montoBs: monto, banco: String(datos.banco || ''),
+            recibido: new Date().toISOString(), texto: String(datos.texto || '').slice(0, 400), ventaId: null
+          };
+          lista.unshift(pago);
+          store.put({ clave: CLAVE_PAGOS, lista: lista.slice(0, MAX_PAGOS) });
+          salida = { pago: pago, nuevo: true };
+        };
+      });
+    });
+  }
+
+  /**
+   * Marca una venta abierta como verificada, en una sola transacción.
+   * opciones.referencia = referencia del pago (SMS) que la verifica; ese pago queda ligado a la venta
+   * y no puede verificar otra. Sin referencia, opciones.via = 'manual' (el comerciante lo vio en su banco).
+   * Devuelve la venta actualizada.
+   */
+  function verificarVenta(id, opciones) {
+    var o = opciones || {};
+    var refPago = o.referencia ? String(o.referencia) : null;
+    return abrir().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([STORE_VENTAS, STORE_CONFIG], 'readwrite');
+        var ventas = tx.objectStore(STORE_VENTAS);
+        var config = tx.objectStore(STORE_CONFIG);
+        var venta, error;
+        function fallar(texto) { error = new Error(texto); tx.abort(); }
+        tx.oncomplete = function () { resolve(venta); };
+        tx.onerror = function () { reject(error || tx.error); };
+        tx.onabort = function () { reject(error || tx.error || new Error('Transacción abortada')); };
+        ventas.get(Number(id)).onsuccess = function (e) {
+          venta = e.target.result;
+          if (!venta) return fallar('La venta no existe.');
+          if (venta.anuladaEn) return fallar('La venta está anulada.');
+          if (venta.cierreId != null) return fallar('La venta ya está en un cierre de caja.');
+          if (venta.verificadaEn) return;
+          if (!refPago) {
+            venta.verificadaEn = new Date().toISOString();
+            venta.verificacion = 'manual';
+            ventas.put(venta);
+            return;
+          }
+          config.get(CLAVE_PAGOS).onsuccess = function (ev) {
+            var registro = ev.target.result;
+            var lista = (registro && registro.lista) || [];
+            var pago = lista.filter(function (p) { return p.referencia === refPago; })[0];
+            if (!pago) return fallar('No encontré ese pago.');
+            if (pago.ventaId != null && pago.ventaId !== venta.id) return fallar('Ese pago ya verificó otra venta.');
+            pago.ventaId = venta.id;
+            config.put(registro);
+            venta.verificadaEn = new Date().toISOString();
+            venta.verificacion = 'sms';
+            venta.refBanco = pago.referencia;
+            ventas.put(venta);
+          };
+        };
+      });
     });
   }
 
@@ -449,6 +554,9 @@
     archivarVentas: archivarVentas,
     cierres: cierres,
     anularVenta: anularVenta,
+    pagosRecibidos: pagosRecibidos,
+    guardarPagoRecibido: guardarPagoRecibido,
+    verificarVenta: verificarVenta,
     exportarRespaldo: exportarRespaldo,
     validarRespaldo: validarRespaldo,
     importarRespaldo: importarRespaldo,

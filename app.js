@@ -8,6 +8,9 @@
  * tachadas y fuera de los totales, nunca se borran). Ajustes exporta e importa un respaldo JSON.
  * La pizarra muestra la tasa BCV USD (la única que usan los cálculos) y, como referencia,
  * las tasas EUR y Paralelo/Binance. Ajustes guarda el nombre, RIF/teléfono, logo y tema del comercio.
+ * Los Bs se cobran por Pago Móvil o Punto de venta. El Pago Móvil abre una hoja con el monto exacto,
+ * los datos del comercio y la referencia; la venta queda "por verificar" hasta emparejarla con el SMS
+ * del banco del comerciante (compartido a la app o pegado; pagomovil.js lo lee).
  *
  * Todos los montos se manejan en centavos enteros para evitar errores de coma
  * flotante; solo se convierten a decimales al mostrarlos o guardarlos.
@@ -16,6 +19,7 @@
   'use strict';
 
   var DB = window.CuadreDB;
+  var PM = window.CuadrePM;
   var MAX_DIGITOS_ENTEROS = 7;
 
   // ---------- Estado ----------
@@ -25,6 +29,8 @@
     comercio: { nombre: '', contacto: '', logo: null, tema: null },
     campoActivo: 'total',    // 'total' | 'recibido' (efectivo USD)
     entrada: { total: '', recibido: '' }, // texto tecleado, p. ej. "12.5"
+    canalBs: 'pago-movil',   // cómo se cobran los Bs: 'pago-movil' | 'punto'
+    pagos: [],               // pagos recibidos leídos de SMS (copia de CuadreDB.pagosRecibidos)
     recibo: null             // última venta cobrada, para el Recibo Exprés
   };
 
@@ -233,6 +239,9 @@
     var c = estado.comercio;
     el.ajusteNombre.value = c.nombre || '';
     el.ajusteContacto.value = c.contacto || '';
+    el.ajustePmBanco.value = c.pmBanco || '';
+    el.ajustePmTelefono.value = c.pmTelefono || '';
+    el.ajustePmDocumento.value = c.pmDocumento || '';
     el.ajusteLogo.value = '';
     logoPendiente = undefined;
     vistaLogo(c.logo);
@@ -279,7 +288,10 @@
 
   function guardarAjustes(e) {
     if (e) e.preventDefault();
-    var cambios = { nombre: el.ajusteNombre.value, contacto: el.ajusteContacto.value };
+    var cambios = {
+      nombre: el.ajusteNombre.value, contacto: el.ajusteContacto.value,
+      pmBanco: el.ajustePmBanco.value, pmTelefono: el.ajustePmTelefono.value, pmDocumento: el.ajustePmDocumento.value
+    };
     if (logoPendiente !== undefined) cambios.logo = logoPendiente;
     el.ajustesGuardar.disabled = true;
     DB.guardarAjustes(cambios).then(function (a) {
@@ -349,6 +361,7 @@
   function limpiarFormulario() {
     estado.entrada.total = '';
     estado.entrada.recibido = '';
+    estado.canalBs = 'pago-movil';
     activarCampo('total');
     recalcular();
   }
@@ -399,13 +412,21 @@
     return r;
   }
 
-  /** 'efectivo' | 'mixto' | 'pago-movil', según cómo se pagó. */
+  /** 'efectivo' | 'mixto' | 'pago-movil' | 'punto', según cómo se pagó. */
   function metodoDePago(r) {
     if (r.restanteUsd === 0) return 'efectivo';
-    return r.efectivo > 0 ? 'mixto' : 'pago-movil';
+    if (r.efectivo > 0) return 'mixto';
+    return estado.canalBs === 'punto' ? 'punto' : 'pago-movil';
   }
 
-  var NOMBRE_METODO = { efectivo: 'Efectivo USD', mixto: 'Pago mixto', 'pago-movil': 'Pago Móvil' };
+  var NOMBRE_METODO = { efectivo: 'Efectivo USD', mixto: 'Pago mixto', 'pago-movil': 'Pago Móvil', punto: 'Punto de venta' };
+  var NOMBRE_CANAL = { 'pago-movil': 'Pago Móvil', punto: 'Punto de venta' };
+
+  function elegirCanal(canal) {
+    if (!NOMBRE_CANAL[canal]) return;
+    estado.canalBs = canal;
+    recalcular();
+  }
 
   function recalcular() {
     var r = calcular();
@@ -427,7 +448,7 @@
       principal = usd(0);
       secundario = 'Sin vuelto ni restante';
     } else {
-      titulo = r.efectivo > 0 ? 'Restante a cobrar en Bs · Pago Móvil' : 'Total a cobrar en Bs · Pago Móvil';
+      titulo = (r.efectivo > 0 ? 'Restante a cobrar en Bs · ' : 'Total a cobrar en Bs · ') + NOMBRE_CANAL[estado.canalBs];
       principal = r.tasa ? bs(r.restanteBs) : '—';
       secundario = 'Equivale a ' + usd(r.restanteUsd);
     }
@@ -439,6 +460,12 @@
     poner(el.resultadoPrincipal, principal);
     poner(el.resultadoSecundario, secundario);
 
+    if (el.canalBs) {
+      el.canalBs.hidden = !(r.valido && r.modo === 'restante');
+      Array.prototype.forEach.call(el.canalBs.querySelectorAll('[data-canal]'), function (b) {
+        b.setAttribute('aria-checked', String(b.getAttribute('data-canal') === estado.canalBs));
+      });
+    }
     avisar(r.aviso);
     if (el.registrar) el.registrar.disabled = !r.valido || registrando;
     return r;
@@ -456,8 +483,6 @@
   function cobrar() {
     var r = calcular();
     if (!r.valido || registrando) return;
-    registrando = true;
-    if (el.registrar) el.registrar.disabled = true;
 
     var venta = {
       fecha: new Date().toISOString(),
@@ -475,11 +500,28 @@
     // Tasas de referencia vigentes, para el recibo (no intervienen en el cálculo).
     if (estado.tasasRef.eur) venta.tasaEur = estado.tasasRef.eur.valor;
     if (estado.tasasRef.paralelo) venta.tasaParalelo = estado.tasasRef.paralelo.valor;
+    if (r.restanteBs > 0) venta.canalBs = estado.canalBs;
 
-    DB.registrarVenta(venta).then(function (id) {
+    // Pago Móvil: primero la hoja con el monto exacto, los datos del comercio y la referencia.
+    if (venta.canalBs === 'pago-movil') return abrirCobroPM(venta);
+    guardarVenta(venta);
+  }
+
+  /** Registra la venta; con `refPago` (pago ya recibido por SMS) la deja verificada en el acto. */
+  function guardarVenta(venta, refPago) {
+    if (registrando) return Promise.resolve();
+    registrando = true;
+    if (el.registrar) el.registrar.disabled = true;
+    return DB.registrarVenta(venta).then(function (id) {
       venta.id = id;
+      if (!refPago) return venta;
+      return DB.verificarVenta(id, { referencia: refPago }).catch(function (e) {
+        console.warn(e); // la venta quedó registrada; solo queda por verificar
+        return venta;
+      });
+    }).then(function (guardada) {
       limpiarFormulario();
-      mostrarRecibo(venta);
+      mostrarRecibo(Object.assign(venta, guardada));
       return renderVentas();
     }).catch(function (e) {
       console.error(e);
@@ -488,6 +530,300 @@
       registrando = false;
       recalcular();
     });
+  }
+
+  // ---------- Cobro por Pago Móvil ----------
+  var ventaPorCobrar = null;
+  var pagoEncontrado = null; // pago recibido (SMS) que coincide con la referencia escrita
+
+  function datosPagoMovil() {
+    var c = estado.comercio;
+    if (!c.pmBanco || !c.pmTelefono || !c.pmDocumento) return null;
+    return [
+      ['Banco', c.pmBanco + (PM.nombreBanco(c.pmBanco) ? ' · ' + PM.nombreBanco(c.pmBanco) : '')],
+      ['Teléfono', c.pmTelefono],
+      ['Cédula / RIF', c.pmDocumento]
+    ];
+  }
+
+  function textoDatosPagoMovil(montoBs) {
+    var t = encabezadoComercio('Datos para Pago Móvil').concat(['']);
+    datosPagoMovil().forEach(function (l) { t.push(l[0] + ': ' + l[1]); });
+    t.push('Monto: ' + bs(montoBs), '', 'Envíe el monto exacto, por favor. ¡Gracias!');
+    return t.join('\n');
+  }
+
+  function llenarDl(dl, lineas) {
+    dl.innerHTML = '';
+    lineas.forEach(function (l) {
+      var dt = document.createElement('dt');
+      var dd = document.createElement('dd');
+      dt.textContent = l[0];
+      dd.textContent = l[1];
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    });
+  }
+
+  function abrirCobroPM(venta) {
+    if (!el.cobroPm) return guardarVenta(venta);
+    ventaPorCobrar = venta;
+    pagoEncontrado = null;
+    var monto = cent(venta.restanteBs);
+    poner(el.cobroPmMonto, bs(monto));
+    poner(el.cobroPmEquivale, 'Equivale a ' + usd(cent(venta.restanteUsd)) + (venta.efectivoUsd > 0 ? ' · el resto se pagó en efectivo' : ''));
+    var datos = datosPagoMovil();
+    el.cobroPmDatos.hidden = !datos;
+    el.cobroPmBotones.hidden = !datos;
+    el.cobroPmSinDatos.hidden = !!datos;
+    if (datos) {
+      llenarDl(el.cobroPmDatos, datos);
+      el.cobroPmWhatsapp.href = 'https://wa.me/?text=' + encodeURIComponent(textoDatosPagoMovil(monto));
+      poner(el.cobroPmCopiar, 'Copiar datos');
+    }
+    el.cobroPmRef.value = '';
+    estadoPago(el.cobroPmEstado, '');
+    el.cobroPmRegistrar.disabled = false;
+    if (!el.cobroPm.open) el.cobroPm.showModal();
+    el.cobroPmCerrar.focus();
+    cargarPagos().then(evaluarRefCobro);
+  }
+
+  function cargarPagos() {
+    return DB.pagosRecibidos().then(function (lista) { estado.pagos = lista; }, function (e) {
+      console.error(e);
+      estado.pagos = [];
+    });
+  }
+
+  /** Mensaje de estado del pago: tipo 'ok' | 'aviso' | 'error' | 'info'. */
+  function estadoPago(nodo, texto, tipo) {
+    nodo.textContent = texto || '';
+    nodo.hidden = !texto;
+    nodo.setAttribute('data-tipo', tipo || 'info');
+  }
+
+  /** Busca entre los SMS ya recibidos el pago que corresponde a la referencia escrita. */
+  function evaluarRefCobro() {
+    if (!ventaPorCobrar) return;
+    pagoEncontrado = null;
+    var ref = PM.limpiarRef(el.cobroPmRef.value);
+    var monto = cent(ventaPorCobrar.restanteBs);
+    if (!ref) return estadoPago(el.cobroPmEstado, 'Sin referencia, la venta quedará por verificar.');
+    if (ref.length < 4) return estadoPago(el.cobroPmEstado, 'Escribe al menos 4 dígitos de la referencia.');
+    var coinciden = (estado.pagos || []).filter(function (p) { return PM.coincideRef(ref, p.referencia); });
+    var libres = coinciden.filter(function (p) { return p.ventaId == null; });
+    var exactos = libres.filter(function (p) { return cent(p.montoBs) === monto; });
+    if (exactos.length === 1) {
+      pagoEncontrado = exactos[0];
+      return estadoPago(el.cobroPmEstado, '✓ Pago recibido: ' + bs(monto) + ' · Ref. ' + pagoEncontrado.referencia +
+        '. La venta quedará verificada.', 'ok');
+    }
+    if (libres.length) {
+      return estadoPago(el.cobroPmEstado, 'Llegó un pago con esa referencia, pero por ' + bs(cent(libres[0].montoBs)) +
+        ', no por ' + bs(monto) + '. La venta quedará por verificar.', 'error');
+    }
+    if (coinciden.length) {
+      return estadoPago(el.cobroPmEstado, '⚠ Esa referencia ya verificó otra venta. Puede ser una captura repetida: revisa tu banco.', 'error');
+    }
+    estadoPago(el.cobroPmEstado, 'Aún no tengo el SMS de este pago. La venta quedará por verificar y se verifica sola al compartir el SMS.', 'aviso');
+  }
+
+  function registrarCobroPM(e) {
+    if (e) e.preventDefault();
+    if (!ventaPorCobrar) return;
+    var venta = ventaPorCobrar;
+    var ref = PM.limpiarRef(el.cobroPmRef.value);
+    if (ref) venta.referencia = ref;
+    var refPago = pagoEncontrado ? pagoEncontrado.referencia : null;
+    el.cobroPmRegistrar.disabled = true;
+    ventaPorCobrar = null;
+    el.cobroPm.close();
+    guardarVenta(venta, refPago);
+  }
+
+  function copiarDatosPM() {
+    var datos = ventaPorCobrar && datosPagoMovil();
+    if (!datos) return;
+    var texto = textoDatosPagoMovil(cent(ventaPorCobrar.restanteBs));
+    var hecho = function () { poner(el.cobroPmCopiar, '¡Copiado!'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(texto).then(hecho, function () { poner(el.cobroPmCopiar, 'No se pudo copiar'); });
+    } else {
+      poner(el.cobroPmCopiar, 'No se pudo copiar');
+    }
+  }
+
+  // ---------- Verificar Pago Móvil (SMS del banco) ----------
+  var ventaAVerificar = null; // venta elegida en la lista; null = buscar entre todas las pendientes
+  var verificando = false;
+
+  /** Ventas abiertas, válidas y con Pago Móvil sin verificar. */
+  function pendientesDe(ventas) {
+    return ventas.filter(function (v) { return !v.anuladaEn && v.cierreId == null && desglose(v).porVerificar; });
+  }
+
+  function abrirVerificar(opciones) {
+    if (!el.verificar) return;
+    var o = opciones || {};
+    ventaAVerificar = null;
+    el.verificarTexto.value = o.texto || '';
+    estadoPago(el.verificarResultado, '');
+    pintarOpciones([]);
+    el.verificarPegar.hidden = !(navigator.clipboard && navigator.clipboard.readText);
+    if (!el.verificar.open) el.verificar.showModal();
+    return Promise.all([DB.ventasAbiertas(), cargarPagos()]).then(function (res) {
+      var ventas = res[0];
+      if (o.ventaId != null) ventaAVerificar = ventas.filter(function (v) { return v.id === Number(o.ventaId); })[0] || null;
+      pintarVerificar(ventas);
+      if (o.texto) return procesarSMS();
+      if (ventaAVerificar) el.verificarTexto.focus(); else el.verificarCerrar.focus();
+    }).catch(function (e) {
+      console.error(e);
+      estadoPago(el.verificarResultado, 'No se pudieron leer las ventas.', 'error');
+    });
+  }
+
+  function lineasVenta(v) {
+    var d = desglose(v);
+    var l = [
+      ['Hora', fmtFechaRecibo.format(new Date(v.fecha))],
+      ['Pago Móvil', bs(d.restanteBs)]
+    ];
+    if (v.referencia) l.push(['Referencia', v.referencia]);
+    return l;
+  }
+
+  function pintarVerificar(ventas) {
+    var v = ventaAVerificar;
+    el.verificarVenta.hidden = !v;
+    el.verificarManual.hidden = !(v && desglose(v).porVerificar);
+    if (v) llenarDl(el.verificarVenta, lineasVenta(v));
+    var pendientes = v ? [] : pendientesDe(ventas);
+    el.verificarPendientes.hidden = !pendientes.length;
+    el.verificarLista.innerHTML = '';
+    pendientes.slice().reverse().forEach(function (p) {
+      var d = desglose(p);
+      var li = document.createElement('li');
+      li.className = 'venta';
+      li.innerHTML = '<span class="venta-hora"></span><span class="venta-total"></span><span class="venta-detalle"></span>';
+      li.children[0].textContent = fmtHora.format(new Date(p.fecha));
+      li.children[1].textContent = bs(d.restanteBs);
+      li.children[2].textContent = p.referencia ? 'Ref. ' + p.referencia : 'Sin referencia';
+      el.verificarLista.appendChild(li);
+    });
+  }
+
+  /** Botones para elegir a qué venta aplicar un pago cuando no hay una coincidencia exacta. */
+  function pintarOpciones(opciones, pago) {
+    el.verificarOpciones.innerHTML = '';
+    el.verificarOpciones.hidden = !opciones.length;
+    opciones.forEach(function (v) {
+      var d = desglose(v);
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'boton boton-terciario';
+      b.setAttribute('data-verificar-venta', String(v.id));
+      b.setAttribute('data-verificar-ref', pago.referencia);
+      b.textContent = 'Verificar la venta de las ' + fmtHora.format(new Date(v.fecha)) + ' (' + bs(d.restanteBs) + ')';
+      el.verificarOpciones.appendChild(b);
+    });
+  }
+
+  function verificarYMostrar(id, refPago) {
+    if (verificando) return Promise.resolve();
+    verificando = true;
+    return DB.verificarVenta(id, refPago ? { referencia: refPago } : { via: 'manual' }).then(function (v) {
+      pintarOpciones([]);
+      estadoPago(el.verificarResultado, '✓ Verificada la venta de las ' + fmtHora.format(new Date(v.fecha)) + ' por ' +
+        bs(desglose(v).restanteBs) + (refPago ? ' · Ref. ' + refPago : ' (revisada en el banco)') + '.', 'ok');
+      if (estado.recibo && estado.recibo.id === v.id) mostrarRecibo(v, true);
+      if (ventaAVerificar && ventaAVerificar.id === v.id) ventaAVerificar = v;
+      return Promise.all([renderVentas(), DB.ventasAbiertas()]).then(function (res) { pintarVerificar(res[1]); });
+    }).catch(function (e) {
+      console.error(e);
+      estadoPago(el.verificarResultado, e && e.message ? e.message : 'No se pudo verificar. Intenta de nuevo.', 'error');
+    }).then(function () {
+      verificando = false;
+    });
+  }
+
+  /** Lee el SMS, lo guarda como pago recibido y lo empareja con la venta que corresponde. */
+  function procesarSMS() {
+    pintarOpciones([]);
+    var p = PM.parsear(el.verificarTexto.value);
+    if (!el.verificarTexto.value.trim()) return estadoPago(el.verificarResultado, 'Pega o comparte el mensaje del banco.', 'aviso');
+    if (p.enviado) return estadoPago(el.verificarResultado, 'Este mensaje parece de un pago que TÚ enviaste, no de uno recibido.', 'error');
+    if (!p.montoBs || !p.referencia) {
+      var falta = !p.montoBs && !p.referencia ? 'el monto ni la referencia' : (!p.montoBs ? 'el monto' : 'la referencia');
+      return estadoPago(el.verificarResultado, 'No encontré ' + falta + ' en el mensaje. ¿Es el SMS de tu banco? ' +
+        (ventaAVerificar ? 'Si ya lo viste en tu banco, puedes marcarla verificada a mano.' : ''), 'error');
+    }
+    var res;
+    return DB.guardarPagoRecibido({ referencia: p.referencia, montoBs: p.montoBs / 100, banco: p.banco, texto: el.verificarTexto.value })
+      .then(function (r) {
+        res = r;
+        return DB.ventasAbiertas();
+      }).then(function (ventas) {
+        var pago = res.pago;
+        var monto = cent(pago.montoBs);
+        var datosPago = bs(monto) + ' · Ref. ' + pago.referencia + (pago.banco ? ' · ' + pago.banco : '');
+        var vObjetivo = ventaAVerificar;
+        if (pago.ventaId != null && !(vObjetivo && vObjetivo.id === pago.ventaId)) {
+          return estadoPago(el.verificarResultado, '⚠ Este pago (' + datosPago + ') ya verificó otra venta. ' +
+            'Puede ser un SMS repetido o una captura reutilizada.', 'error');
+        }
+        var igual = function (v) { return desglose(v).restanteBs === monto; };
+        if (vObjetivo) {
+          if (!desglose(vObjetivo).porVerificar) return estadoPago(el.verificarResultado, 'Esta venta ya está verificada.', 'ok');
+          if (vObjetivo.referencia && !PM.coincideRef(vObjetivo.referencia, pago.referencia)) {
+            estadoPago(el.verificarResultado, 'La referencia del SMS (' + pago.referencia + ') no es la de esta venta (' +
+              vObjetivo.referencia + '). Guardé el pago por si es de otra venta.', 'error');
+            return pintarOpciones([vObjetivo], pago);
+          }
+          if (igual(vObjetivo)) return verificarYMostrar(vObjetivo.id, pago.referencia);
+          estadoPago(el.verificarResultado, 'El SMS es por ' + bs(monto) + ' y la venta por ' + bs(desglose(vObjetivo).restanteBs) +
+            '. Si aceptas la diferencia, verifícala igual.', 'error');
+          return pintarOpciones([vObjetivo], pago);
+        }
+        var pendientes = pendientesDe(ventas);
+        var porRef = pendientes.filter(function (v) { return v.referencia && PM.coincideRef(v.referencia, pago.referencia); });
+        var exactas = porRef.filter(igual);
+        if (exactas.length === 1) return verificarYMostrar(exactas[0].id, pago.referencia);
+        if (porRef.length) {
+          estadoPago(el.verificarResultado, 'Hay una venta con esa referencia, pero el monto no cuadra: el SMS es por ' + bs(monto) + '.', 'error');
+          return pintarOpciones(porRef, pago);
+        }
+        var sinRef = pendientes.filter(function (v) { return !v.referencia && igual(v); });
+        if (sinRef.length === 1) return verificarYMostrar(sinRef[0].id, pago.referencia);
+        if (sinRef.length > 1) {
+          estadoPago(el.verificarResultado, 'Hay ' + sinRef.length + ' ventas por ' + bs(monto) + ' sin referencia. ¿A cuál corresponde?', 'aviso');
+          return pintarOpciones(sinRef, pago);
+        }
+        estadoPago(el.verificarResultado, (res.nuevo ? 'Guardé este pago (' : 'Este pago ya estaba guardado (') + datosPago +
+          '). Cuando cobres con esa referencia, la venta quedará verificada sola.', 'aviso');
+      }).catch(function (e) {
+        console.error(e);
+        estadoPago(el.verificarResultado, 'No se pudo guardar el pago. Intenta de nuevo.', 'error');
+      });
+  }
+
+  function pegarSMS() {
+    navigator.clipboard.readText().then(function (texto) {
+      el.verificarTexto.value = texto || '';
+      if (texto) procesarSMS();
+    }, function () {
+      estadoPago(el.verificarResultado, 'No pude leer el portapapeles. Mantén presionado el cuadro y elige «Pegar».', 'aviso');
+    });
+  }
+
+  /** Texto compartido a Cuadre desde otra app (Web Share Target del manifest): abre la verificación. */
+  function revisarCompartido() {
+    var q = new URLSearchParams(location.search);
+    var texto = [q.get('titulo'), q.get('texto'), q.get('enlace')].filter(Boolean).join(' ').trim();
+    if (!q.has('texto') && !q.has('titulo')) return;
+    if (history.replaceState) history.replaceState(null, '', location.pathname);
+    if (texto) abrirVerificar({ texto: texto });
   }
 
   // ---------- Recibo Exprés ----------
@@ -506,7 +842,11 @@
       vueltoBs: Math.max(0, cent(v.vueltoBs)),
       restanteUsd: cent(v.restanteUsd),
       restanteBs: cent(v.restanteBs),
-      metodo: v.metodo || 'efectivo'
+      metodo: v.metodo || 'efectivo',
+      // Las ventas anteriores a Punto de venta no tienen canalBs: sus Bs cuentan como Pago Móvil.
+      canal: v.canalBs || (v.metodo === 'punto' ? 'punto' : 'pago-movil'),
+      // Solo las ventas nuevas (con canalBs) se piden verificar.
+      porVerificar: v.canalBs === 'pago-movil' && cent(v.restanteBs) > 0 && !v.verificadaEn
     };
   }
 
@@ -522,7 +862,8 @@
     if (v.tasaParalelo) lineas.push(['Tasa Paralelo', 'Bs ' + fmtTasa.format(v.tasaParalelo) + ' por USD']);
     lineas.push(['Total en Bs', bs(d.totalBs)]);
     if (d.efectivo > 0) lineas.push(['Pagado en USD (efectivo)', usd(d.efectivo)]);
-    if (d.restanteBs > 0) lineas.push(['Pagado en Bs (Pago Móvil)', bs(d.restanteBs)]);
+    if (d.restanteBs > 0) lineas.push(['Pagado en Bs (' + NOMBRE_CANAL[d.canal] + ')', bs(d.restanteBs)]);
+    if (d.restanteBs > 0 && d.canal === 'pago-movil' && (v.refBanco || v.referencia)) lineas.push(['Referencia', v.refBanco || v.referencia]);
     if (d.vueltoUsd > 0) lineas.push(['Vuelto entregado', usd(d.vueltoUsd)]);
     return lineas;
   }
@@ -563,15 +904,11 @@
     estado.recibo = v;
     if (!el.recibo) return;
     pintarComercioRecibo();
-    el.reciboDetalle.innerHTML = '';
-    lineasRecibo(v).forEach(function (l) {
-      var dt = document.createElement('dt');
-      var dd = document.createElement('dd');
-      dt.textContent = l[0];
-      dd.textContent = l[1];
-      el.reciboDetalle.appendChild(dt);
-      el.reciboDetalle.appendChild(dd);
-    });
+    var lineas = lineasRecibo(v);
+    // El estado de verificación es para el comerciante: va en pantalla, no en el WhatsApp del cliente.
+    if (v.canalBs === 'pago-movil' && cent(v.restanteBs) > 0) lineas.push(['Pago Móvil', v.verificadaEn ? 'Verificado ✓' : 'Por verificar']);
+    llenarDl(el.reciboDetalle, lineas);
+    el.reciboVerificar.hidden = !desglose(v).porVerificar;
     var metodo = desglose(v).metodo;
     poner(el.reciboMetodo, NOMBRE_METODO[metodo] || '');
     el.reciboMetodo.setAttribute('data-metodo', metodo);
@@ -593,7 +930,7 @@
   function detalleVenta(d) {
     var partes = [];
     if (d.efectivo > 0) partes.push('Efectivo ' + usd(d.efectivo));
-    if (d.restanteBs > 0) partes.push('Pago Móvil ' + bs(d.restanteBs));
+    if (d.restanteBs > 0) partes.push((d.canal === 'punto' ? 'Punto ' : 'Pago Móvil ') + bs(d.restanteBs));
     if (d.vueltoUsd > 0) partes.push('Vuelto ' + usd(d.vueltoUsd));
     return partes.join(' · ');
   }
@@ -622,6 +959,7 @@
             '<span class="venta-detalle"></span>';
           li.children[0].textContent = fmtHora.format(new Date(v.fecha));
           li.children[1].textContent = usd(d.totalUsd) + ' · ' + bs(d.totalBs);
+          var estadoPm = null; // estado del Pago Móvil, va junto al detalle del pago
           if (v.anuladaEn) {
             var insignia = document.createElement('span');
             insignia.className = 'insignia-anulada';
@@ -629,6 +967,19 @@
             insignia.lastChild.textContent = fmtHora.format(new Date(v.anuladaEn));
             li.children[2].appendChild(insignia);
           } else {
+            if (d.porVerificar) {
+              var verif = document.createElement('button');
+              verif.type = 'button';
+              verif.className = 'boton boton-verificar';
+              verif.setAttribute('data-verificar', String(v.id));
+              verif.setAttribute('aria-label', 'Verificar el Pago Móvil de las ' + fmtHora.format(new Date(v.fecha)));
+              verif.textContent = 'Por verificar';
+              estadoPm = verif;
+            } else if (v.verificadaEn && d.restanteBs > 0) {
+              estadoPm = document.createElement('span');
+              estadoPm.className = 'insignia-verificada';
+              estadoPm.textContent = '✓ Verificado';
+            }
             var boton = document.createElement('button');
             boton.type = 'button';
             boton.className = 'boton boton-anular';
@@ -638,6 +989,7 @@
             li.children[2].appendChild(boton);
           }
           li.children[3].textContent = detalleVenta(d);
+          if (estadoPm) { li.children[3].appendChild(document.createTextNode(' ')); li.children[3].appendChild(estadoPm); }
           el.ventasLista.appendChild(li);
         });
         if (!ventas.length) {
@@ -653,6 +1005,12 @@
         totalCent += d.totalUsd;
         totalBsCent += d.totalBs; // Bs a la tasa de cada venta
       });
+
+      var pendientes = pendientesDe(ventas).length;
+      if (el.abrirVerificar) {
+        poner(el.abrirVerificar, pendientes ? 'Verificar (' + pendientes + ')' : 'Verificar pagos');
+        el.abrirVerificar.toggleAttribute('data-pendientes', pendientes > 0);
+      }
 
       var anuladas = ventas.length - validas.length;
       poner(el.ventasResumen, plural(validas.length, 'venta', 'ventas') +
@@ -694,7 +1052,10 @@
         el.anularDetalle.appendChild(dt);
         el.anularDetalle.appendChild(dd);
       });
-      mensajeAnular('');
+      if (v.verificadaEn) {
+        mensajeAnular('Este Pago Móvil ya está verificado: el dinero llegó a tu banco. Si anulas, devuélvelo al cliente.');
+      }
+      if (!v.verificadaEn) mensajeAnular('');
       el.anularConfirmar.disabled = false;
       if (!el.anular.open) el.anular.showModal();
       el.anularCancelar.focus();
@@ -743,9 +1104,9 @@
     var hoy = DB ? DB.diaLocal() : '';
     var r = {
       cantidad: 0, anuladas: 0, diasAnteriores: 0,
-      metodos: { efectivo: 0, mixto: 0, 'pago-movil': 0 },
+      metodos: { efectivo: 0, mixto: 0, 'pago-movil': 0, punto: 0 },
       recibidoUsd: 0, vueltoUsd: 0, efectivoUsd: 0,
-      bancoBs: 0, bancoUsd: 0,
+      bancoBs: 0, bancoUsd: 0, pagoMovilBs: 0, puntoBs: 0, porVerificar: 0, porVerificarBs: 0,
       totalUsd: 0, totalBs: 0,
       desde: null, hasta: null
     };
@@ -761,6 +1122,8 @@
       r.vueltoUsd += d.vueltoUsd;
       r.bancoBs += d.restanteBs;
       r.bancoUsd += d.restanteUsd;
+      if (d.canal === 'punto') r.puntoBs += d.restanteBs; else r.pagoMovilBs += d.restanteBs;
+      if (d.porVerificar) { r.porVerificar++; r.porVerificarBs += d.restanteBs; }
       r.totalUsd += d.totalUsd;
       r.totalBs += d.totalBs;
     });
@@ -778,7 +1141,14 @@
     if (r.metodos.efectivo) partes.push(r.metodos.efectivo + ' efectivo');
     if (r.metodos.mixto) partes.push(r.metodos.mixto + ' mixto');
     if (r.metodos['pago-movil']) partes.push(r.metodos['pago-movil'] + ' Pago Móvil');
+    if (r.metodos.punto) partes.push(r.metodos.punto + ' punto');
     return partes.join(' · ');
+  }
+
+  /** "Pago Móvil Bs X · Punto Bs Y" (vacío si todo fue Pago Móvil, como en los cierres anteriores a Punto). */
+  function textoCanales(r) {
+    if (!r.puntoBs) return '';
+    return 'Pago Móvil ' + bs(r.pagoMovilBs) + ' · Punto ' + bs(r.puntoBs);
   }
 
   /** `cerradoEn` (ISO) indica un cierre guardado que se reenvía desde el historial. */
@@ -793,8 +1163,10 @@
       '',
       '*Efectivo en caja:* ' + usd(r.efectivoUsd),
       '  Recibido ' + usd(r.recibidoUsd) + ' · Vuelto ' + usd(r.vueltoUsd),
-      '*Banco / Pago Móvil:* ' + bs(r.bancoBs),
-      '  Equivale a ' + usd(r.bancoUsd),
+      '*Banco / Pago Móvil:* ' + bs(r.bancoBs)
+    ], textoCanales(r) ? ['  ' + textoCanales(r)] : [], [
+      '  Equivale a ' + usd(r.bancoUsd)
+    ], r.porVerificar ? ['  Sin verificar: ' + r.porVerificar + ' (' + bs(r.porVerificarBs) + ')'] : [], [
       '',
       '*Total general:* ' + usd(r.totalUsd),
       '  Equivale a ' + bs(r.totalBs)
@@ -817,7 +1189,12 @@
     poner(el.cierreEfectivo, usd(r.efectivoUsd));
     poner(el.cierreEfectivoDetalle, 'Recibido ' + usd(r.recibidoUsd) + ' · Vuelto ' + usd(r.vueltoUsd));
     poner(el.cierreBanco, bs(r.bancoBs));
-    poner(el.cierreBancoDetalle, 'Equivale a ' + usd(r.bancoUsd));
+    poner(el.cierreBancoDetalle, (textoCanales(r) ? textoCanales(r) + ' · ' : '') + 'Equivale a ' + usd(r.bancoUsd));
+    el.cierreAvisoVerificar.textContent = r.porVerificar
+      ? (r.porVerificar === 1 ? 'Hay 1 Pago Móvil sin verificar' : 'Hay ' + r.porVerificar + ' Pagos Móviles sin verificar') +
+        ' (' + bs(r.porVerificarBs) + '). Revísalos en tu banco antes de cerrar.'
+      : '';
+    el.cierreAvisoVerificar.hidden = !r.porVerificar;
     poner(el.cierreTotal, usd(r.totalUsd));
     poner(el.cierreTotalDetalle, 'Equivale a ' + bs(r.totalBs) + ' a la tasa de cada venta');
 
@@ -871,6 +1248,7 @@
       desde: r.desde, hasta: r.hasta, cantidad: r.cantidad, anuladas: r.anuladas, metodos: r.metodos,
       recibidoUsd: r.recibidoUsd / 100, vueltoUsd: r.vueltoUsd / 100, efectivoUsd: r.efectivoUsd / 100,
       bancoBs: r.bancoBs / 100, bancoUsd: r.bancoUsd / 100,
+      pagoMovilBs: r.pagoMovilBs / 100, puntoBs: r.puntoBs / 100, porVerificar: r.porVerificar, porVerificarBs: r.porVerificarBs / 100,
       totalUsd: r.totalUsd / 100, totalBs: r.totalBs / 100
     };
     var ids = cierreActual.ventas.map(function (v) { return v.id; });
@@ -900,12 +1278,14 @@
   function cierreACentavos(c) {
     var r = {
       cantidad: Number(c.cantidad) || 0, anuladas: Number(c.anuladas) || 0, diasAnteriores: 0,
-      metodos: Object.assign({ efectivo: 0, mixto: 0, 'pago-movil': 0 }, c.metodos || {}),
-      desde: c.desde || null, hasta: c.hasta || null
+      metodos: Object.assign({ efectivo: 0, mixto: 0, 'pago-movil': 0, punto: 0 }, c.metodos || {}),
+      desde: c.desde || null, hasta: c.hasta || null, porVerificar: Number(c.porVerificar) || 0
     };
-    ['recibidoUsd', 'vueltoUsd', 'efectivoUsd', 'bancoBs', 'bancoUsd', 'totalUsd', 'totalBs'].forEach(function (k) {
+    ['recibidoUsd', 'vueltoUsd', 'efectivoUsd', 'bancoBs', 'bancoUsd', 'puntoBs', 'porVerificarBs', 'totalUsd', 'totalBs'].forEach(function (k) {
       r[k] = cent(c[k]);
     });
+    // Cierres anteriores a Punto de venta: todo el banco fue Pago Móvil.
+    r.pagoMovilBs = c.pagoMovilBs != null ? cent(c.pagoMovilBs) : r.bancoBs;
     return r;
   }
 
@@ -971,7 +1351,11 @@
     lineas.push(
       ['Efectivo en caja', usd(r.efectivoUsd)],
       ['Recibido / Vuelto', usd(r.recibidoUsd) + ' / ' + usd(r.vueltoUsd)],
-      ['Banco · Pago Móvil', bs(r.bancoBs)],
+      ['Banco · Pago Móvil', bs(r.bancoBs)]
+    );
+    if (r.puntoBs) lineas.push(['Pago Móvil / Punto', bs(r.pagoMovilBs) + ' / ' + bs(r.puntoBs)]);
+    if (r.porVerificar) lineas.push(['Sin verificar', r.porVerificar + ' (' + bs(r.porVerificarBs) + ')']);
+    lineas.push(
       ['Total general', usd(r.totalUsd)],
       ['Total en Bs', bs(r.totalBs)]
     );
@@ -1146,7 +1530,7 @@
     // En iOS Safari, :active solo se pinta al tocar si existe algún oyente de touchstart.
     document.addEventListener('touchstart', function () {}, { passive: true });
     // Tocar fuera del recuadro cierra cualquier modal.
-    [el.tasas, el.ajustes, el.historial, el.anular].forEach(function (d) {
+    [el.tasas, el.ajustes, el.historial, el.anular, el.cobroPm, el.verificar].forEach(function (d) {
       if (d) d.addEventListener('click', function (e) { if (e.target === d) d.close(); });
     });
     if (el.tasas) {
@@ -1182,6 +1566,28 @@
       el.anular.addEventListener('close', function () { ventaPorAnular = null; });
     }
 
+    if (el.cobroPm) {
+      el.cobroPmForm.addEventListener('submit', registrarCobroPM);
+      el.cobroPmCerrar.addEventListener('click', function () { el.cobroPm.close(); });
+      el.cobroPmCancelar.addEventListener('click', function () { el.cobroPm.close(); });
+      el.cobroPm.addEventListener('close', function () { ventaPorCobrar = null; });
+      el.cobroPmRef.addEventListener('input', evaluarRefCobro);
+      el.cobroPmCopiar.addEventListener('click', copiarDatosPM);
+      el.cobroPmIrAjustes.addEventListener('click', function () { el.cobroPm.close(); abrirAjustes(); el.ajustePmBanco.focus(); });
+    }
+    if (el.verificar) {
+      el.abrirVerificar.addEventListener('click', function () { abrirVerificar(); });
+      el.reciboVerificar.addEventListener('click', function () { if (estado.recibo) abrirVerificar({ ventaId: estado.recibo.id }); });
+      el.verificarCerrar.addEventListener('click', function () { el.verificar.close(); });
+      el.verificarProcesar.addEventListener('click', procesarSMS);
+      el.verificarPegar.addEventListener('click', pegarSMS);
+      el.verificarManual.addEventListener('click', function () { if (ventaAVerificar) verificarYMostrar(ventaAVerificar.id, null); });
+      el.verificarOpciones.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-verificar-venta]');
+        if (b) verificarYMostrar(Number(b.getAttribute('data-verificar-venta')), b.getAttribute('data-verificar-ref'));
+      });
+    }
+
     if (el.totalUsd) el.totalUsd.addEventListener('click', function () { activarCampo('total'); });
     if (el.recibidoUsd) el.recibidoUsd.addEventListener('click', function () { activarCampo('recibido'); });
 
@@ -1191,6 +1597,10 @@
       if (tecla) { vibrar(); teclear(tecla.getAttribute('data-key')); return; }
       var billete = e.target.closest('[data-billete]');
       if (billete) { vibrar(); sumarBillete(billete.getAttribute('data-billete')); return; }
+      var canal = e.target.closest('[data-canal]');
+      if (canal) { vibrar(); elegirCanal(canal.getAttribute('data-canal')); return; }
+      var verificar = e.target.closest('[data-verificar]');
+      if (verificar) { abrirVerificar({ ventaId: verificar.getAttribute('data-verificar') }); return; }
       var anular = e.target.closest('[data-anular]');
       if (anular) pedirAnulacion(anular.getAttribute('data-anular'));
     });
@@ -1299,6 +1709,39 @@
       ajusteLogoVacio: $('#ajuste-logo-vacio'),
       ajusteLogoQuitar: $('#ajuste-logo-quitar'),
       ajustesTemas: document.querySelectorAll('#ajustes input[name="tema"]'),
+      ajustePmBanco: $('#ajuste-pm-banco'),
+      ajustePmTelefono: $('#ajuste-pm-telefono'),
+      ajustePmDocumento: $('#ajuste-pm-documento'),
+      canalBs: $('#canal-bs'),
+      cobroPm: $('#cobro-pm'),
+      cobroPmForm: $('#cobro-pm-form'),
+      cobroPmCerrar: $('#cobro-pm-cerrar'),
+      cobroPmMonto: $('#cobro-pm-monto'),
+      cobroPmEquivale: $('#cobro-pm-equivale'),
+      cobroPmDatos: $('#cobro-pm-datos'),
+      cobroPmBotones: $('#cobro-pm-botones'),
+      cobroPmCopiar: $('#cobro-pm-copiar'),
+      cobroPmWhatsapp: $('#cobro-pm-whatsapp'),
+      cobroPmSinDatos: $('#cobro-pm-sin-datos'),
+      cobroPmIrAjustes: $('#cobro-pm-ir-ajustes'),
+      cobroPmRef: $('#cobro-pm-ref'),
+      cobroPmEstado: $('#cobro-pm-estado'),
+      cobroPmCancelar: $('#cobro-pm-cancelar'),
+      cobroPmRegistrar: $('#cobro-pm-registrar'),
+      abrirVerificar: $('#abrir-verificar'),
+      reciboVerificar: $('#recibo-verificar'),
+      verificar: $('#verificar'),
+      verificarCerrar: $('#verificar-cerrar'),
+      verificarVenta: $('#verificar-venta'),
+      verificarTexto: $('#verificar-texto'),
+      verificarPegar: $('#verificar-pegar'),
+      verificarProcesar: $('#verificar-procesar'),
+      verificarResultado: $('#verificar-resultado'),
+      verificarOpciones: $('#verificar-opciones'),
+      verificarPendientes: $('#verificar-pendientes'),
+      verificarLista: $('#verificar-lista'),
+      verificarManual: $('#verificar-manual'),
+      cierreAvisoVerificar: $('#cierre-aviso-verificar'),
       ajustesMensaje: $('#ajustes-mensaje'),
       ajustesGuardar: $('#ajustes-guardar'),
       totalUsd: $('#total-usd'),
@@ -1369,18 +1812,27 @@
       respaldoConfirmar: $('#respaldo-confirmar')
     };
 
+    if (el.ajustePmBanco && PM) {
+      PM.BANCOS.forEach(function (b) {
+        var o = document.createElement('option');
+        o.value = b[0];
+        o.textContent = b[0] + ' · ' + b[1];
+        el.ajustePmBanco.appendChild(o);
+      });
+    }
+
     enlazarEventos();
     actualizarConexion();
     activarCampo('total');
     mostrarTasa();
     recalcular();
 
-    if (!DB) {
-      avisar('Error: no se cargó db.js.');
+    if (!DB || !PM) {
+      avisar('Error: no se cargaron todos los archivos de la app. Recarga la página.');
       return;
     }
 
-    cargarDatos().catch(function (e) {
+    cargarDatos().then(revisarCompartido).catch(function (e) {
       console.error(e);
       avisar('No se pudo abrir el almacenamiento local.');
     });
@@ -1415,6 +1867,7 @@
   window.CuadreApp = {
     aCentavos: aCentavos, aBsCentavos: aBsCentavos, parsearTasa: parsearTasa,
     calcular: calcular, mensajeWhatsApp: mensajeWhatsApp, enlaceWhatsApp: enlaceWhatsApp, lineasRecibo: lineasRecibo,
-    resumirCierre: resumirCierre, mensajeCierre: mensajeCierre, cierreACentavos: cierreACentavos
+    resumirCierre: resumirCierre, mensajeCierre: mensajeCierre, cierreACentavos: cierreACentavos,
+    procesarSMS: procesarSMS, abrirVerificar: abrirVerificar
   };
 })();

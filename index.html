@@ -104,6 +104,11 @@
           <output id="resultado-principal" class="cifra cifra-grande">—</output>
           <output id="resultado-secundario" class="cifra-secundaria"></output>
         </div>
+        <!-- Cómo se cobran los Bs: solo aparece cuando hay restante en Bs -->
+        <div id="canal-bs" class="canal-bs" role="radiogroup" aria-label="¿Cómo paga los Bs?" hidden>
+          <button type="button" class="boton canal" role="radio" data-canal="pago-movil" aria-checked="true">Pago Móvil</button>
+          <button type="button" class="boton canal" role="radio" data-canal="punto" aria-checked="false">Punto de venta</button>
+        </div>
         <p id="aviso" class="aviso" role="alert"></p>
       </div>
 
@@ -148,6 +153,7 @@
         <span id="recibo-metodo" class="insignia"></span>
       </div>
       <dl id="recibo-detalle" class="recibo-detalle"></dl>
+      <button id="recibo-verificar" type="button" class="boton boton-terciario" aria-haspopup="dialog" hidden>Verificar con el SMS del banco</button>
       <a id="enviar-whatsapp" class="boton boton-whatsapp" href="#" target="_blank" rel="noopener">Enviar por WhatsApp</a>
       <p id="recibo-nota" class="recibo-nota" hidden>Sin conexión: el mensaje se enviará cuando WhatsApp tenga internet.</p>
       <button id="nueva-venta" type="button" class="boton boton-terciario">Nueva venta</button>
@@ -155,7 +161,10 @@
 
     <!-- Ventas del día -->
     <section class="tarjeta ventas" aria-labelledby="ventas-titulo">
-      <h2 id="ventas-titulo" class="subtitulo">Ventas de hoy</h2>
+      <div class="ventas-cabecera">
+        <h2 id="ventas-titulo" class="subtitulo">Ventas de hoy</h2>
+        <button id="abrir-verificar" type="button" class="boton boton-editar" aria-haspopup="dialog">Verificar pagos</button>
+      </div>
       <div id="ventas-resumen" class="ventas-resumen">Sin ventas registradas</div>
       <ul id="ventas-lista" class="ventas-lista"></ul>
     </section>
@@ -173,6 +182,7 @@
 
     <div class="cierre-cuerpo">
       <p id="cierre-aviso-dias" class="aviso cierre-aviso" role="alert" hidden></p>
+      <p id="cierre-aviso-verificar" class="aviso cierre-aviso" role="alert" hidden></p>
       <div class="cierre-dato">
         <span class="etiqueta">Ventas realizadas</span>
         <output id="cierre-cantidad" class="cifra">0</output>
@@ -185,7 +195,7 @@
         <span id="cierre-efectivo-detalle" class="cierre-detalle"></span>
       </div>
       <div class="cierre-dato cierre-banco">
-        <span class="etiqueta">Banco · Pago Móvil</span>
+        <span class="etiqueta">Banco · Pago Móvil y Punto</span>
         <output id="cierre-banco" class="cifra">Bs 0,00</output>
         <span id="cierre-banco-detalle" class="cierre-detalle"></span>
       </div>
@@ -247,6 +257,71 @@
     <div class="modal-acciones confirmacion-botones">
       <button id="anular-cancelar" type="button" class="boton boton-terciario">Cancelar</button>
       <button id="anular-confirmar" type="button" class="boton boton-peligro boton-peligro-fuerte">Sí, anular</button>
+    </div>
+  </dialog>
+
+  <!-- Cobro por Pago Móvil: monto exacto, datos del comercio y referencia -->
+  <dialog id="cobro-pm" class="modal" aria-labelledby="cobro-pm-titulo">
+    <form id="cobro-pm-form" novalidate>
+      <div class="modal-cabecera">
+        <div>
+          <h2 id="cobro-pm-titulo" class="subtitulo">Cobrar por Pago Móvil</h2>
+          <p class="modal-nota">El cliente debe pagar este monto exacto.</p>
+        </div>
+        <button id="cobro-pm-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar">✕</button>
+      </div>
+      <div class="modal-cuerpo">
+        <div class="cobro-pm-monto">
+          <output id="cobro-pm-monto" class="cifra cifra-grande">—</output>
+          <span id="cobro-pm-equivale" class="cifra-secundaria"></span>
+        </div>
+        <dl id="cobro-pm-datos" class="recibo-detalle cobro-pm-datos" hidden></dl>
+        <div id="cobro-pm-botones" class="cobro-pm-botones" hidden>
+          <button id="cobro-pm-copiar" type="button" class="boton boton-terciario">Copiar datos</button>
+          <a id="cobro-pm-whatsapp" class="boton boton-whatsapp" href="#" target="_blank" rel="noopener">Enviar al cliente</a>
+        </div>
+        <p id="cobro-pm-sin-datos" class="modal-nota cobro-pm-sin-datos" hidden>
+          Guarda tus datos de Pago Móvil en <button id="cobro-pm-ir-ajustes" type="button" class="enlace">Ajustes</button> para enviárselos al cliente con un toque.
+        </p>
+        <label class="campo-texto">
+          <span class="etiqueta">Referencia · últimos 6 dígitos</span>
+          <input id="cobro-pm-ref" type="text" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="Ej. 123456">
+        </label>
+        <p id="cobro-pm-estado" class="estado-pago" role="status" hidden></p>
+      </div>
+      <div class="modal-acciones confirmacion-botones">
+        <button id="cobro-pm-cancelar" type="button" class="boton boton-terciario">Cancelar</button>
+        <button id="cobro-pm-registrar" type="submit" class="boton boton-primario">Registrar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Verificar Pago Móvil con el SMS del banco -->
+  <dialog id="verificar" class="modal" aria-labelledby="verificar-titulo">
+    <div class="modal-cabecera">
+      <div>
+        <h2 id="verificar-titulo" class="subtitulo">Verificar Pago Móvil</h2>
+        <p class="modal-nota">Comparte a Cuadre el SMS o la notificación de TU banco, o pégalo aquí. No uses la captura del cliente.</p>
+      </div>
+      <button id="verificar-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-cuerpo">
+      <dl id="verificar-venta" class="recibo-detalle" hidden></dl>
+      <label class="campo-texto">
+        <span class="etiqueta">Mensaje del banco</span>
+        <textarea id="verificar-texto" rows="4" placeholder="Ej. Recibiste un Pago Móvil por Bs. 1.250,00 … Ref: 001234567890"></textarea>
+      </label>
+      <div class="verificar-botones">
+        <button id="verificar-pegar" type="button" class="boton boton-terciario" hidden>Pegar</button>
+        <button id="verificar-procesar" type="button" class="boton boton-primario">Verificar</button>
+      </div>
+      <p id="verificar-resultado" class="estado-pago" role="status" hidden></p>
+      <div id="verificar-opciones" class="verificar-opciones" hidden></div>
+      <div id="verificar-pendientes" class="verificar-pendientes" hidden>
+        <span class="etiqueta">Por verificar</span>
+        <ul id="verificar-lista" class="ventas-lista"></ul>
+      </div>
+      <button id="verificar-manual" type="button" class="boton boton-terciario" hidden>Ya lo vi en mi banco: marcar verificado</button>
     </div>
   </dialog>
 
@@ -318,6 +393,23 @@
           </div>
         </div>
 
+        <fieldset class="pm-ajuste">
+          <legend class="etiqueta">Tus datos de Pago Móvil</legend>
+          <p class="modal-nota">Se le envían al cliente al cobrar.</p>
+          <label class="campo-texto">
+            <span class="etiqueta">Banco</span>
+            <select id="ajuste-pm-banco"><option value="">Elige tu banco</option></select>
+          </label>
+          <label class="campo-texto">
+            <span class="etiqueta">Teléfono</span>
+            <input id="ajuste-pm-telefono" type="tel" inputmode="tel" maxlength="20" autocomplete="off" placeholder="Ej. 0414-1234567">
+          </label>
+          <label class="campo-texto">
+            <span class="etiqueta">Cédula o RIF</span>
+            <input id="ajuste-pm-documento" type="text" maxlength="20" autocomplete="off" placeholder="Ej. V-12345678">
+          </label>
+        </fieldset>
+
         <fieldset class="temas">
           <legend class="etiqueta">Paleta de colores</legend>
           <label class="tema-opcion"><input type="radio" name="tema" value="azul"><span class="tema-muestra" data-muestra="azul"></span>Azul Corporativo</label>
@@ -354,6 +446,7 @@
   </dialog>
 
   <script src="db.js" defer></script>
+  <script src="pagomovil.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

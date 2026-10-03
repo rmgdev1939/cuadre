@@ -896,3 +896,98 @@ h1, h2, p { margin: 0; }
   .cierre[open], .modal[open] { animation: none; }
   .boton { transition: none; }
 }
+
+/* Pago Móvil y Punto de venta */
+.canal-bs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.canal-bs[hidden] { display: none; }
+.canal {
+  min-height: 48px;
+  border: 2px solid var(--borde);
+  background: var(--superficie);
+  color: var(--texto);
+  font-size: .95rem;
+}
+.canal[aria-checked="true"] { border-color: var(--bs); background: var(--bs-suave); color: var(--bs); }
+.insignia[data-metodo="punto"] { background: var(--bs-suave); color: var(--bs); }
+
+.ventas-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.ventas-cabecera .subtitulo { margin: 0; }
+#abrir-verificar[data-pendientes] { border-color: #b45309; background: #fef3c7; color: #92400e; }
+:root[data-tema="oscuro"] #abrir-verificar[data-pendientes] { border-color: #fbbf24; background: #3b2a00; color: #fde68a; }
+
+.boton-verificar {
+  min-height: 36px;
+  margin-top: 4px;
+  padding: 0 12px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: .85rem;
+}
+:root[data-tema="oscuro"] .boton-verificar { background: #3b2a00; color: #fde68a; }
+.insignia-verificada {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--primario-suave);
+  color: var(--primario);
+  font-size: .75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cobro-pm-monto { display: grid; gap: 2px; text-align: center; padding: 12px; border-radius: 14px; background: var(--bs); color: var(--sobre-bs); }
+.cobro-pm-monto .cifra, .cobro-pm-monto .cifra-secundaria { color: inherit; }
+.cobro-pm-datos[hidden], .cobro-pm-botones[hidden], .cobro-pm-sin-datos[hidden] { display: none; }
+.cobro-pm-datos { margin: 0; padding: 10px 12px; border: 1px solid var(--borde); border-radius: 12px; }
+.cobro-pm-botones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cobro-pm-botones .boton { min-height: 48px; }
+.enlace {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primario);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.estado-pago {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--fondo);
+  color: var(--texto-suave);
+  font-size: .92rem;
+  font-weight: 600;
+}
+.estado-pago[hidden] { display: none; }
+.estado-pago[data-tipo="ok"] { background: var(--primario-suave); color: var(--primario-oscuro); }
+.estado-pago[data-tipo="aviso"] { background: #fef3c7; color: #92400e; }
+.estado-pago[data-tipo="error"] { background: var(--peligro-suave); color: var(--peligro); }
+:root[data-tema="oscuro"] .estado-pago[data-tipo="ok"] { color: var(--primario); }
+:root[data-tema="oscuro"] .estado-pago[data-tipo="aviso"] { background: #3b2a00; color: #fde68a; }
+
+.campo-texto textarea, .campo-texto select {
+  min-height: var(--toque);
+  padding: 10px 14px;
+  border: 2px solid var(--borde);
+  border-radius: 12px;
+  background: var(--superficie);
+  color: var(--texto);
+  font: inherit;
+  font-size: 1rem;
+}
+.campo-texto textarea { resize: vertical; }
+.campo-texto textarea:focus, .campo-texto select:focus { outline: none; border-color: var(--primario); }
+.verificar-botones { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
+.verificar-botones:has(#verificar-pegar[hidden]) { grid-template-columns: 1fr; }
+.verificar-opciones { display: grid; gap: 8px; }
+.verificar-opciones[hidden], .verificar-pendientes[hidden], #verificar-venta[hidden], #verificar-manual[hidden], #recibo-verificar[hidden] { display: none; }
+.verificar-pendientes .ventas-lista { margin-top: 4px; }
+#verificar-venta { margin: 0; padding: 10px 12px; border: 1px solid var(--borde); border-radius: 12px; }
+#verificar .modal-cuerpo { padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+
+.pm-ajuste { display: grid; gap: 10px; min-inline-size: 0; margin: 0; padding: 12px; border: 1px solid var(--borde); border-radius: 12px; }
+.pm-ajuste legend { padding: 0 4px; }
