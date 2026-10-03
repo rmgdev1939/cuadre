@@ -468,8 +468,14 @@
     if (logoPendiente !== undefined) cambios.logo = logoPendiente;
     if (coloresPendientes) cambios.colores = coloresPendientes;
     if (temaActual() === 'logo') cambios.tema = 'logo';
+    var pin = el.ajustePin.value.trim();
+    if (pin && !pinValido(pin)) { mensajeAjustes('El PIN tiene de 4 a 6 números.'); el.ajustePin.focus(); return; }
     el.ajustesGuardar.disabled = true;
-    DB.guardarAjustes(cambios).then(function (a) {
+    (pin ? datosPin(pin) : Promise.resolve(null)).then(function (p) {
+      if (p) Object.assign(cambios, p);
+      return DB.guardarAjustes(cambios);
+    }).then(function (a) {
+      el.ajustePin.value = '';
       estado.comercio = a;
       logoPendiente = undefined;
       coloresPendientes = null;
@@ -1699,12 +1705,19 @@
   var vistaActual = 'caja';
 
   function irA(vista) {
-    var secciones = { caja: el.vistaCaja, resumen: el.vistaResumen, inventario: el.vistaInventario, ajustes: el.vistaAjustes, registro: el.vistaRegistro };
+    var secciones = {
+      caja: el.vistaCaja, resumen: el.vistaResumen, inventario: el.vistaInventario, ajustes: el.vistaAjustes,
+      registro: el.vistaRegistro, portada: el.vistaPortada, ingresar: el.vistaIngresar
+    };
+    var afuera = vista === 'registro' || vista === 'portada' || vista === 'ingresar';
     if (!secciones[vista]) return;
     vistaActual = vista;
     Object.keys(secciones).forEach(function (k) { if (secciones[k]) secciones[k].hidden = k !== vista; });
-    el.menu.hidden = vista === 'registro';
+    el.menu.hidden = afuera;
+    el.acceso.hidden = !afuera;
+    el.estadoConexion.hidden = afuera;
     el.abrirCierre.hidden = vista !== 'caja';
+    if (vista === 'ingresar') prepararIngreso();
     Array.prototype.forEach.call(el.menu.querySelectorAll('[data-vista]'), function (b) {
       if (b.getAttribute('data-vista') === vista) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
@@ -1713,6 +1726,108 @@
     if (vista === 'resumen') pintarDashboard();
     if (vista === 'ajustes') abrirAjustes();
     if (vista === 'inventario') cargarCatalogo().then(function () { pintarInventario(); nuevoProducto(); });
+  }
+
+  // ---------- Cuenta local: PIN y sesión ----------
+  var CLAVE_SESION = 'cuadre-sesion';
+  var intentosPin = 0, bloqueoPinHasta = 0;
+
+  function hayCuenta() { return !!(estado.comercio.registrado || estado.comercio.nombre); }
+
+  function sesionActiva() {
+    try { return localStorage.getItem(CLAVE_SESION) === '1'; } catch (e) { return true; }
+  }
+  function abrirSesion() { try { localStorage.setItem(CLAVE_SESION, '1'); } catch (e) { /* sin almacenamiento */ } }
+  function cerrarSesion() {
+    try { localStorage.removeItem(CLAVE_SESION); } catch (e) { /* sin almacenamiento */ }
+    ocultarRecibo();
+    limpiarFormulario();
+    irA('portada');
+  }
+
+  function pinValido(pin) { return /^\d{4,6}$/.test(pin); }
+
+  function nuevaSal() {
+    var a = new Uint8Array(16);
+    crypto.getRandomValues(a);
+    return Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+  }
+
+  /** SHA-256 de "sal:PIN" en hexadecimal. Solo funciona en HTTPS (o localhost). */
+  function hashPin(pin, sal) {
+    if (!window.crypto || !crypto.subtle) return Promise.reject(new Error('Este navegador no permite guardar el PIN de forma segura.'));
+    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(sal + ':' + pin)).then(function (buf) {
+      return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+    });
+  }
+
+  function datosPin(pin) {
+    var sal = nuevaSal();
+    return hashPin(pin, sal).then(function (h) { return { pinHash: h, pinSal: sal }; });
+  }
+
+  /** A dónde va la app al abrir: portada si no hay cuenta o se cerró la sesión; si no, la caja. */
+  function vistaInicial() {
+    if (!hayCuenta()) return 'portada';
+    if (!estado.comercio.pinHash) return 'caja'; // cuentas de antes del PIN entran directo
+    return sesionActiva() ? 'caja' : 'portada';
+  }
+
+  function mensajeIngreso(texto) {
+    el.ingresarMensaje.textContent = texto || '';
+    el.ingresarMensaje.hidden = !texto;
+  }
+
+  function prepararIngreso() {
+    var c = estado.comercio;
+    var cuenta = hayCuenta();
+    mensajeIngreso('');
+    el.ingresarPin.value = '';
+    el.ingresarCuenta.hidden = !cuenta;
+    el.ingresarSinCuenta.hidden = cuenta;
+    el.ingresarPinCampo.hidden = !(cuenta && c.pinHash);
+    el.ingresarEntrar.hidden = !cuenta;
+    poner(el.ingresarNombre, c.nombre || 'Tu negocio');
+    if (c.logo) { el.ingresarLogo.src = c.logo; el.ingresarLogo.hidden = false; } else { el.ingresarLogo.hidden = true; }
+    poner(el.ingresarNota, !cuenta ? 'No hay ninguna cuenta en este teléfono.'
+      : c.pinHash ? 'Escribe tu PIN para entrar.' : 'Esta cuenta no tiene PIN. Puedes ponerle uno en Ajustes.');
+    if (cuenta && c.pinHash) setTimeout(function () { el.ingresarPin.focus(); }, 50);
+  }
+
+  function ingresar(e) {
+    if (e) e.preventDefault();
+    var c = estado.comercio;
+    if (!hayCuenta()) return;
+    if (!c.pinHash) { abrirSesion(); irA('caja'); return; }
+    var espera = Math.ceil((bloqueoPinHasta - Date.now()) / 1000);
+    if (espera > 0) { mensajeIngreso('Demasiados intentos. Espera ' + espera + ' segundos.'); return; }
+    var pin = el.ingresarPin.value.trim();
+    if (!pinValido(pin)) { mensajeIngreso('El PIN tiene de 4 a 6 números.'); el.ingresarPin.focus(); return; }
+    hashPin(pin, c.pinSal).then(function (h) {
+      if (h !== c.pinHash) {
+        intentosPin++;
+        if (intentosPin >= 5) { intentosPin = 0; bloqueoPinHasta = Date.now() + 30000; }
+        el.ingresarPin.value = '';
+        mensajeIngreso('PIN incorrecto.');
+        el.ingresarPin.focus();
+        return;
+      }
+      intentosPin = 0;
+      abrirSesion();
+      irA('caja');
+    }).catch(function (err) {
+      mensajeIngreso(err.message);
+    });
+  }
+
+  /** "Crear cuenta": con una cuenta ya guardada en el teléfono, se ofrece entrar a ella. */
+  function irACrear() {
+    if (hayCuenta()) {
+      irA('ingresar');
+      mensajeIngreso('Ya hay una cuenta en este teléfono: entra con tu PIN.');
+      return;
+    }
+    irA('registro');
   }
 
   // ---------- Registro inicial ----------
@@ -1751,6 +1866,8 @@
     var tasa = parsearTasa(el.registroTasa.value);
     if (!nombre) { mensajeRegistro('Escribe el nombre de tu negocio.'); el.registroNombre.focus(); return; }
     if (!isFinite(tasa) || tasa <= 0) { mensajeRegistro('Escribe la tasa BCV de hoy, por ejemplo 36,50.'); el.registroTasa.focus(); return; }
+    var pin = el.registroPin.value.trim();
+    if (!pinValido(pin)) { mensajeRegistro('Elige un PIN de 4 a 6 números para entrar.'); el.registroPin.focus(); return; }
     var cambios = {
       nombre: nombre, contacto: el.registroContacto.value, registrado: true,
       pmBanco: el.registroPmBanco.value, pmTelefono: el.registroPmTelefono.value, pmDocumento: el.registroPmDocumento.value,
@@ -1759,11 +1876,15 @@
     if (registroLogo) cambios.logo = registroLogo;
     if (registroColores) cambios.colores = registroColores;
     el.registroCrear.disabled = true;
-    DB.guardarTasa(tasa, 'bcv').then(function (t) {
+    datosPin(pin).then(function (p) {
+      Object.assign(cambios, p);
+      return DB.guardarTasa(tasa, 'bcv');
+    }).then(function (t) {
       estado.tasa = t;
       return DB.guardarAjustes(cambios);
     }).then(function (a) {
       estado.comercio = a;
+      abrirSesion();
       aplicarTema(a.tema || 'esmeralda', a.colores);
       pintarMarca();
       mostrarTasa();
@@ -2338,6 +2459,13 @@
         if (b) { vibrar(); irA(b.getAttribute('data-vista')); }
       });
     }
+    if (el.vistaPortada) {
+      [el.irIngresar, el.portadaIngresar].forEach(function (b) { b.addEventListener('click', function () { irA('ingresar'); }); });
+      [el.irCrear, el.portadaCrear, el.ingresarIrCrear].forEach(function (b) { b.addEventListener('click', irACrear); });
+      el.ingresarForm.addEventListener('submit', ingresar);
+      el.cerrarSesion.addEventListener('click', cerrarSesion);
+      el.marcaNombre.closest('.marca').addEventListener('click', function () { if (el.menu.hidden && vistaActual !== 'portada') irA('portada'); });
+    }
     if (el.vistaRegistro) {
       el.registroForm.addEventListener('submit', crearCuenta);
       el.registroLogo.addEventListener('change', elegirLogoRegistro);
@@ -2503,6 +2631,27 @@
       registroPmDocumento: $('#registro-pm-documento'),
       registroMensaje: $('#registro-mensaje'),
       registroCrear: $('#registro-crear'),
+      registroPin: $('#registro-pin'),
+      ajustePin: $('#ajuste-pin'),
+      cerrarSesion: $('#cerrar-sesion'),
+      acceso: $('#acceso'),
+      irIngresar: $('#ir-ingresar'),
+      irCrear: $('#ir-crear'),
+      vistaPortada: $('#vista-portada'),
+      portadaCrear: $('#portada-crear'),
+      portadaIngresar: $('#portada-ingresar'),
+      vistaIngresar: $('#vista-ingresar'),
+      ingresarForm: $('#ingresar-form'),
+      ingresarNota: $('#ingresar-nota'),
+      ingresarCuenta: $('#ingresar-cuenta'),
+      ingresarLogo: $('#ingresar-logo'),
+      ingresarNombre: $('#ingresar-nombre'),
+      ingresarPinCampo: $('#ingresar-pin-campo'),
+      ingresarPin: $('#ingresar-pin'),
+      ingresarMensaje: $('#ingresar-mensaje'),
+      ingresarEntrar: $('#ingresar-entrar'),
+      ingresarSinCuenta: $('#ingresar-sin-cuenta'),
+      ingresarIrCrear: $('#ingresar-ir-crear'),
       ajustesForm: $('#ajustes-form'),
       ajusteNombre: $('#ajuste-nombre'),
       ajusteContacto: $('#ajuste-contacto'),
@@ -2667,17 +2816,23 @@
     recalcular();
 
     if (!DB || !PM) {
+      irA('caja');
       avisar('Error: no se cargaron todos los archivos de la app. Recarga la página.');
       return;
     }
 
-    cargarDatos().then(revisarCompartido).catch(function (e) {
+    cargarDatos().then(function () {
+      if (vistaActual === 'caja') revisarCompartido();
+    }).catch(function (e) {
       console.error(e);
+      irA('caja');
       avisar('No se pudo abrir el almacenamiento local.');
     });
   }
 
   /** Lee tasas, ajustes y ventas de IndexedDB y pinta la pantalla (al iniciar y tras importar un respaldo). */
+  var arranque = true; // la primera carga decide la vista; tras importar un respaldo se queda donde está
+
   function cargarDatos() {
     return DB.abrir()
       .then(function () { return Promise.all([DB.obtenerTasas(), DB.obtenerAjustes()]); })
@@ -2689,9 +2844,10 @@
         // IndexedDB manda: si la copia de localStorage se perdió o difiere, se corrige aquí.
         if (a.tema) aplicarTema(a.tema, a.colores);
         pintarMarca();
-        // Primera vez: registro del comercio. Quien ya tenía nombre (versiones anteriores) entra directo.
-        if (!a.registrado && !a.nombre) irA('registro');
-        else if (vistaActual === 'registro') irA('caja');
+        // Sin cuenta o con la sesión cerrada: portada. Quien ya tenía nombre (versiones anteriores) entra directo.
+        var afuera = ['portada', 'ingresar', 'registro'].indexOf(vistaActual) !== -1;
+        if (arranque || afuera) irA(vistaInicial());
+        arranque = false;
         mostrarTasa();
         recalcular();
         return renderVentas();

@@ -171,7 +171,8 @@
   var AJUSTES_VACIOS = {
     nombre: '', contacto: '', logo: null, tema: null, pmBanco: '', pmTelefono: '', pmDocumento: '',
     colores: null,      // paleta sacada del logo { primario, primarioOscuro, primarioSuave, fondo, bs, bsSuave, tecla, teclaActiva }
-    registrado: false   // true tras el registro inicial
+    registrado: false,  // true tras el registro inicial
+    pinHash: '', pinSal: '' // PIN para entrar: SHA-256 de sal + PIN (nunca el PIN en claro)
   };
   var CLAVES_COLORES = ['primario', 'primarioOscuro', 'primarioSuave', 'fondo', 'bs', 'bsSuave', 'tecla', 'teclaActiva'];
 

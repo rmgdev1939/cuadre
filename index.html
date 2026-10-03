@@ -41,11 +41,84 @@
     </h1>
     <div class="barra-acciones">
       <span id="estado-conexion" class="estado" role="status" aria-live="polite">—</span>
-      <button id="abrir-cierre" type="button" class="boton boton-barra" aria-haspopup="dialog">Cerrar Caja</button>
+      <button id="abrir-cierre" type="button" class="boton boton-barra" aria-haspopup="dialog" hidden>Cerrar Caja</button>
+      <div id="acceso" class="acceso" hidden>
+        <button id="ir-ingresar" type="button" class="boton boton-barra">Ingresar</button>
+        <button id="ir-crear" type="button" class="boton boton-acceso">Crear cuenta</button>
+      </div>
     </div>
   </header>
 
-  <main id="vista-caja" class="contenedor vista">
+  <!-- Portada: presentación de Cuadre antes de entrar -->
+  <section id="vista-portada" class="vista portada" aria-labelledby="portada-titulo" hidden>
+    <div class="portada-hero">
+      <div class="portada-hero-texto">
+        <p class="portada-marca">Cuadre</p>
+        <h2 id="portada-titulo" class="portada-titulo">Tu caja en dólares y bolívares, cuadrada al céntimo.</h2>
+        <p class="portada-lema">Cobra, da el vuelto, verifica el Pago Móvil y cierra la caja desde el teléfono. Funciona sin internet.</p>
+        <div class="portada-cta">
+          <button id="portada-crear" type="button" class="boton boton-acceso boton-grande">Crear cuenta gratis</button>
+          <button id="portada-ingresar" type="button" class="boton boton-contorno boton-grande">Ya tengo cuenta</button>
+        </div>
+      </div>
+      <div class="portada-demo" aria-hidden="true">
+        <div class="demo-tasa"><span>Tasa BCV</span><strong>36,50</strong></div>
+        <div class="demo-resultado"><span>Restante · Pago Móvil</span><strong>Bs 365,00</strong><small>Equivale a $10,00</small></div>
+        <div class="demo-chip">✓ Pago Móvil verificado</div>
+      </div>
+    </div>
+    <div class="contenedor portada-funciones">
+      <article class="tarjeta funcion">
+        <span class="funcion-icono" aria-hidden="true">$⇄Bs</span>
+        <h3>Pagos mixtos sin errores</h3>
+        <p>Efectivo en dólares y el resto en bolívares con la tasa BCV del día. El vuelto sale solo.</p>
+      </article>
+      <article class="tarjeta funcion">
+        <span class="funcion-icono" aria-hidden="true">✓</span>
+        <h3>Pago Móvil verificado</h3>
+        <p>Compara la referencia con el SMS de tu banco y te avisa si te mandan una captura repetida.</p>
+      </article>
+      <article class="tarjeta funcion">
+        <span class="funcion-icono" aria-hidden="true">▤</span>
+        <h3>Inventario y resumen</h3>
+        <p>Cobra tocando productos, el stock baja solo y ves cuánto vendiste hoy, en la semana y en el mes.</p>
+      </article>
+      <article class="tarjeta funcion">
+        <span class="funcion-icono" aria-hidden="true">⌁</span>
+        <h3>Sin internet</h3>
+        <p>Todo se guarda en tu teléfono. Cierra la caja y envía el resumen por WhatsApp cuando vuelva la señal.</p>
+      </article>
+    </div>
+    <p class="portada-pie">Cuadre · Hecho para comercios de Venezuela</p>
+  </section>
+
+  <!-- Ingresar: desbloquea la cuenta guardada en este teléfono -->
+  <section id="vista-ingresar" class="contenedor vista" aria-labelledby="ingresar-titulo" hidden>
+   <div class="tarjeta panel ingresar">
+    <div class="panel-cabecera">
+      <h2 id="ingresar-titulo" class="subtitulo">Ingresar a tu cuenta</h2>
+      <p id="ingresar-nota" class="modal-nota"></p>
+    </div>
+    <form id="ingresar-form" class="modal-cuerpo" novalidate>
+      <div id="ingresar-cuenta" class="ingresar-cuenta" hidden>
+        <img id="ingresar-logo" class="ingresar-logo" alt="" hidden>
+        <strong id="ingresar-nombre"></strong>
+      </div>
+      <label id="ingresar-pin-campo" class="campo-texto">
+        <span class="etiqueta">PIN</span>
+        <input id="ingresar-pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="6" placeholder="••••">
+      </label>
+      <p id="ingresar-mensaje" class="aviso" role="alert"></p>
+      <button id="ingresar-entrar" type="submit" class="boton boton-primario">Entrar</button>
+      <div id="ingresar-sin-cuenta" class="ingresar-sin-cuenta" hidden>
+        <button id="ingresar-ir-crear" type="button" class="boton boton-primario">Crear cuenta</button>
+      </div>
+      <p class="modal-nota">Tu cuenta vive en este teléfono. Para usarla en otro, exporta el respaldo desde Ajustes e impórtalo allá.</p>
+    </form>
+   </div>
+  </section>
+
+  <main id="vista-caja" class="contenedor vista" hidden>
     <!-- Aviso de nueva versión: app.js lo muestra cuando el Service Worker instala una versión nueva -->
     <div id="nueva-version" class="nueva-version" role="status" hidden>
       <span>Nueva versión disponible</span>
@@ -237,6 +310,10 @@
           <input id="registro-pm-documento" type="text" maxlength="20" autocomplete="off" placeholder="Ej. V-12345678">
         </label>
       </details>
+      <label class="campo-texto">
+        <span class="etiqueta">PIN para entrar (4 a 6 números) *</span>
+        <input id="registro-pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6" placeholder="••••">
+      </label>
       <p id="registro-mensaje" class="aviso" role="alert"></p>
       <button id="registro-crear" type="submit" class="boton boton-primario">Crear mi cuenta</button>
     </form>
@@ -375,6 +452,15 @@
           <label class="tema-opcion"><input type="radio" name="tema" value="oscuro"><span class="tema-muestra" data-muestra="oscuro"></span>Modo Oscuro</label>
         </fieldset>
         <p id="ajustes-mensaje" class="aviso" role="alert"></p>
+
+        <section class="sesion" aria-labelledby="sesion-titulo">
+          <span id="sesion-titulo" class="etiqueta">Cuenta</span>
+          <label class="campo-texto">
+            <span class="etiqueta">Nuevo PIN (déjalo vacío para no cambiarlo)</span>
+            <input id="ajuste-pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6" placeholder="••••">
+          </label>
+          <button id="cerrar-sesion" type="button" class="boton boton-terciario">Cerrar sesión</button>
+        </section>
 
         <section class="respaldo" aria-labelledby="respaldo-titulo">
           <span id="respaldo-titulo" class="etiqueta">Respaldo de datos</span>
