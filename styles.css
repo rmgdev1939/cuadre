@@ -1,0 +1,898 @@
+/* Cuadre · estilos mobile-first */
+
+/*
+ * Temas: el atributo data-tema de <html> lo pone un script en <head> antes del primer pintado.
+ * Sin atributo se usa Verde Esmeralda (predeterminado).
+ */
+:root {
+  --primario: #047857;
+  --primario-oscuro: #065f46;
+  --primario-suave: #d1fae5;
+  --sobre-primario: #ffffff;
+  --barra: var(--primario);
+  --sobre-barra: var(--sobre-primario);
+  --fondo: #f4f6f5;
+  --superficie: #ffffff;
+  --texto: #111827;
+  --texto-suave: #374151;
+  --borde: #d1d5db;
+  --borde-tarjeta: #e2e6e9;
+  --sombra-tarjeta: 0 1px 2px rgba(0, 0, 0, .06), 0 2px 8px rgba(0, 0, 0, .05);
+  --tecla: #eef2f1;
+  --tecla-activa: #dbe4e2;
+  --peligro: #b91c1c;
+  --peligro-suave: #fee2e2;
+  --exito: #15803d;
+  --bs: #1d4ed8;
+  --bs-suave: #dbeafe;
+  --sobre-bs: #ffffff;
+  --whatsapp: #1fa855;
+  --sobre-whatsapp: #ffffff;
+  --radio: 16px;
+  --toque: 56px;
+  --espacio: 12px;
+  color-scheme: light;
+}
+
+/* Azul Corporativo: el Bs pasa a violeta para no confundirse con el color principal. */
+:root[data-tema="azul"] {
+  --primario: #1e40af;
+  --primario-oscuro: #1e3a8a;
+  --primario-suave: #dbeafe;
+  --fondo: #f3f5f9;
+  --tecla: #eef1f7;
+  --tecla-activa: #dde3ef;
+  --bs: #6d28d9;
+  --bs-suave: #ede9fe;
+}
+
+/* Naranja Comercio */
+:root[data-tema="naranja"] {
+  --primario: #c2410c;
+  --primario-oscuro: #9a3412;
+  --primario-suave: #ffedd5;
+  --fondo: #f8f5f2;
+  --tecla: #f4efea;
+  --tecla-activa: #e9e0d7;
+}
+
+/* Modo Oscuro */
+:root[data-tema="oscuro"] {
+  --primario: #14b8a6;
+  --primario-oscuro: #0d9488;
+  --primario-suave: #134e4a;
+  --sobre-primario: #042f2e;
+  --barra: #151f1e;
+  --sobre-barra: #f3f4f6;
+  --fondo: #0b1211;
+  --superficie: #151f1e;
+  --texto: #f3f4f6;
+  --texto-suave: #b8c2cc;
+  --borde: #2f3b3a;
+  --borde-tarjeta: #26332f;
+  --sombra-tarjeta: none;
+  --tecla: #1f2b2a;
+  --tecla-activa: #2a3938;
+  --peligro: #f87171;
+  --peligro-suave: #3b1414;
+  --exito: #4ade80;
+  --bs: #93c5fd;
+  --bs-suave: #172554;
+  --sobre-bs: #0b1a33;
+  --whatsapp: #25d366;
+  --sobre-whatsapp: #052e16;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1, h2, p { margin: 0; }
+
+.visualmente-oculto {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Barra superior */
+.barra {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
+  gap: 8px;
+  background: var(--barra);
+  color: var(--sobre-barra);
+}
+.marca {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: .02em;
+}
+.marca-logo {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #fff;
+}
+.marca-logo[hidden] { display: none; }
+.marca-nombre {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: clamp(.95rem, 4.2vw, 1.25rem);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.estado {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sobre-barra) 18%, transparent);
+  font-size: .8rem;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.estado::before {
+  content: "";
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .7;
+}
+.estado.online::before { background: #4ade80; opacity: 1; }
+.estado.offline { background: #fbbf24; color: #3b2a00; }
+.estado.offline::before { background: #92400e; opacity: 1; }
+
+.barra-acciones { display: flex; flex: none; align-items: center; gap: 8px; }
+/* Layout */
+.contenedor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--espacio);
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: var(--espacio) 16px calc(env(safe-area-inset-bottom) + 24px);
+}
+
+.tarjeta {
+  background: var(--superficie);
+  border: 1px solid var(--borde-tarjeta);
+  border-radius: var(--radio);
+  padding: 16px 14px;
+  box-shadow: var(--sombra-tarjeta);
+}
+
+.etiqueta {
+  display: block;
+  font-size: .78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--texto-suave);
+}
+
+.subtitulo { font-size: 1.05rem; font-weight: 800; margin-bottom: 8px; }
+
+/* Botones */
+.boton {
+  min-height: var(--toque);
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: transform .06s ease, background-color .12s ease;
+}
+.boton:active { transform: scale(.96); }
+.boton:focus-visible { outline: 3px solid var(--primario); outline-offset: 2px; }
+.boton:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+.boton-primario {
+  width: 100%;
+  min-height: 64px;
+  background: var(--primario);
+  color: var(--sobre-primario);
+  font-size: 1.2rem;
+}
+.boton-primario:active { background: var(--primario-oscuro); }
+
+.boton-secundario {
+  padding: 0 18px;
+  background: var(--primario);
+  color: var(--sobre-primario);
+  font-size: 1rem;
+}
+
+/* Botones de la barra superior (Cerrar Caja, Ajustes) */
+.boton-barra {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--sobre-barra) 45%, transparent);
+  background: transparent;
+  color: var(--sobre-barra);
+  font-size: .85rem;
+}
+.boton-barra:active { background: color-mix(in srgb, var(--sobre-barra) 15%, transparent); }
+.boton-barra:focus-visible { outline-color: var(--sobre-barra); }
+.boton-barra-icono { display: inline-flex; align-items: center; justify-content: center; width: 36px; padding: 0; }
+
+/* En teléfonos estrechos el estado de conexión queda como un punto. */
+@media (max-width: 400px) {
+  .estado { padding: 6px; font-size: 0; gap: 0; }
+}
+
+/* Pizarra de tasas */
+.pizarra { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px 14px; }
+.pizarra-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.boton-editar {
+  min-height: 40px;
+  padding: 0 14px;
+  background: var(--primario-suave);
+  color: var(--primario);
+  font-size: .9rem;
+}
+.tasa-valor {
+  font-size: clamp(2.2rem, 11vw, 2.8rem);
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--primario);
+}
+.tasa-valor small { font-size: .9rem; font-weight: 600; color: var(--texto-suave); }
+.tasa-fecha { font-size: .82rem; color: var(--texto-suave); }
+.pizarra-secundarias { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.tasa-secundaria {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--fondo);
+}
+.tasa-sec-valor { font-size: 1.15rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.tasa-sec-fecha { font-size: .75rem; color: var(--texto-suave); }
+.tasa-sec-fecha:empty { display: none; }
+
+/* Calculadora */
+.pos-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.pos-cabecera .subtitulo { margin: 0; }
+.boton-limpiar {
+  min-height: 40px;
+  padding: 0 14px;
+  background: var(--peligro-suave);
+  color: var(--peligro);
+  font-size: .95rem;
+}
+
+/* Campos del punto de venta */
+.campos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.campo { display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
+
+.campo-caja {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  padding: 0 12px;
+  border: 2px solid var(--borde);
+  border-radius: 12px;
+  background: var(--fondo);
+  transition: border-color .12s ease, background-color .12s ease;
+}
+.campo-caja:has(.campo-activo) {
+  border-color: var(--primario);
+  background: var(--primario-suave);
+}
+.moneda { font-size: 1.3rem; font-weight: 700; color: var(--texto-suave); margin-right: 4px; }
+
+.campo input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--texto);
+  font: inherit;
+  font-size: 1.7rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  cursor: pointer;
+  caret-color: transparent;
+}
+.campo input:focus { outline: none; }
+.campo input.campo-activo { color: var(--primario); }
+
+/* Billetes rápidos */
+.billetes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+.billete {
+  border: 2px solid color-mix(in srgb, var(--primario) 35%, transparent);
+  background: var(--primario-suave);
+  color: var(--primario-oscuro);
+  font-size: 1.2rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--primario) 22%, transparent);
+}
+:root[data-tema="oscuro"] .billete { color: #99f6e4; }
+/* Al tocar, el billete se "llena" con el color principal: se nota aun a pleno sol. */
+.billete:active {
+  background: var(--primario);
+  border-color: var(--primario);
+  color: var(--sobre-primario);
+  box-shadow: none;
+}
+
+/* Teclado numérico */
+.teclado {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+.tecla {
+  min-height: 60px;
+  background: var(--tecla);
+  color: var(--texto);
+  font-size: 1.7rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  /* Borde inferior más oscuro: la tecla parece "física" y al tocarla se hunde. */
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .14);
+}
+:root[data-tema="oscuro"] .tecla { box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .45); }
+.tecla:active {
+  background: var(--tecla-activa);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, .18);
+  transform: translateY(2px) scale(.97);
+}
+.tecla-accion { font-size: 1.4rem; background: var(--primario-suave); color: var(--primario-oscuro); }
+:root[data-tema="oscuro"] .tecla-accion { color: #99f6e4; }
+/* Resultados */
+.resultados { display: grid; gap: 8px; margin-top: 12px; }
+.resultado-linea {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
+}
+.cifra {
+  font-size: 1.3rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+/*
+ * El restante o vuelto es el protagonista: bloque de color sólido con texto blanco
+ * (contraste alto a pleno sol). Restante = color del Bs; vuelto/exacto = color principal.
+ */
+.resultado-destacado {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px 16px;
+  border: 2px solid transparent;
+  border-radius: 16px;
+  background: var(--bs);
+  color: var(--sobre-bs);
+  transition: background-color .15s ease, color .15s ease;
+}
+.resultado-destacado .etiqueta { color: inherit; font-size: .8rem; }
+.resultado-destacado[data-modo="vuelto"],
+.resultado-destacado[data-modo="exacto"] {
+  background: var(--primario);
+  color: var(--sobre-primario);
+}
+/* Sin total todavía: bloque en reposo, sin color. */
+.resultado-destacado[data-vacio] {
+  border: 2px dashed var(--borde);
+  background: var(--fondo);
+  color: var(--texto-suave);
+}
+.cifra-grande {
+  font-size: clamp(2.5rem, 12.5vw, 3.4rem);
+  font-weight: 900;
+  line-height: 1.05;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+.cifra-secundaria {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--texto-suave);
+  font-variant-numeric: tabular-nums;
+}
+.resultado-destacado .cifra-secundaria { color: inherit; font-weight: 700; opacity: .92; }
+.resultado-linea .cifra { font-size: 1.4rem; }
+.cifra-secundaria:empty { display: none; }
+
+.aviso {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--peligro-suave);
+  color: var(--peligro);
+  font-weight: 600;
+}
+.aviso:empty { display: none; }
+
+/* Recibo Exprés */
+.recibo {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 2px solid var(--primario);
+}
+.recibo[hidden] { display: none; }
+.recibo-comercio {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--borde);
+}
+.recibo-comercio[hidden], .recibo-logo[hidden] { display: none; }
+.recibo-logo {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  border-radius: 10px;
+  object-fit: contain;
+  background: #fff;
+}
+.recibo-comercio-texto { display: flex; flex-direction: column; min-width: 0; }
+.recibo-comercio-texto strong { font-size: 1.1rem; overflow-wrap: anywhere; }
+.recibo-comercio-texto span { font-size: .9rem; color: var(--texto-suave); overflow-wrap: anywhere; }
+.recibo-comercio-texto span:empty { display: none; }
+.recibo-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.recibo-cabecera .subtitulo { margin: 0; }
+.insignia {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--primario-suave);
+  color: var(--primario);
+  font-size: .8rem;
+  font-weight: 700;
+}
+.insignia[data-metodo="mixto"],
+.insignia[data-metodo="pago-movil"] { background: var(--bs-suave); color: var(--bs); }
+.recibo-detalle {
+  display: grid;
+  grid-template-columns: minmax(8.5em, 1fr) auto;
+  gap: 6px 12px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.recibo-detalle dt { color: var(--texto-suave); }
+.recibo-detalle dd { margin: 0; font-weight: 700; text-align: right; }
+.boton-whatsapp {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  background: var(--whatsapp);
+  color: var(--sobre-whatsapp);
+  font-size: 1.15rem;
+  text-decoration: none;
+}
+.boton-terciario {
+  min-height: 48px;
+  background: var(--tecla);
+  color: var(--texto);
+}
+.recibo-nota { font-size: .85rem; color: var(--texto-suave); text-align: center; }
+.recibo-nota[hidden] { display: none; }
+
+/* Ventas del día */
+.ventas-resumen {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--fondo);
+  color: var(--texto-suave);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ventas-lista {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.ventas-lista li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--borde);
+  font-variant-numeric: tabular-nums;
+}
+.ventas-lista li:last-child { border-bottom: 0; }
+.venta {
+  display: grid !important;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  align-items: baseline;
+}
+.venta-hora { font-size: .85rem; color: var(--texto-suave); white-space: nowrap; }
+.venta-total { font-weight: 700; text-align: right; }
+.venta-detalle { grid-column: 1 / -1; font-size: .85rem; color: var(--texto-suave); }
+.venta-vacia { color: var(--texto-suave); justify-content: center !important; }
+.ventas-lista:empty { display: none; }
+
+/* Modales: Cierre de Caja, Editar Tasas y Ajustes */
+.cierre, .modal {
+  width: min(100% - 24px, 440px);
+  max-height: calc(100dvh - 24px);
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radio);
+  background: var(--superficie);
+  color: var(--texto);
+  overflow: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .3);
+}
+.cierre::backdrop, .modal::backdrop { background: rgba(4, 20, 19, .55); }
+.cierre[open] { display: flex; flex-direction: column; }
+.cierre-cabecera, .modal-cabecera {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  background: var(--superficie);
+  border-bottom: 1px solid var(--borde);
+}
+.cierre-cabecera .subtitulo, .modal-cabecera .subtitulo { margin: 0; }
+.modal-cabecera { z-index: 1; }
+.modal-nota { font-size: .85rem; color: var(--texto-suave); }
+.modal-cuerpo { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 12px 14px; }
+.modal-acciones {
+  position: sticky;
+  bottom: 0;
+  padding: 10px 14px calc(env(safe-area-inset-bottom) + 14px);
+  background: var(--superficie);
+  border-top: 1px solid var(--borde);
+}
+.modal .aviso[hidden] { display: none; }
+
+.campo-texto { display: flex; flex-direction: column; gap: 4px; }
+.campo-texto input {
+  min-height: var(--toque);
+  padding: 0 14px;
+  border: 2px solid var(--borde);
+  border-radius: 12px;
+  background: var(--superficie);
+  color: var(--texto);
+  font: inherit;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+.campo-texto input:focus { outline: none; border-color: var(--primario); }
+.campo-texto input[aria-invalid="true"] { border-color: var(--peligro); }
+
+/* Logo en Ajustes */
+.logo-ajuste { display: grid; gap: 6px; }
+.logo-fila { display: flex; align-items: center; gap: 12px; }
+.logo-marco {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+  height: 84px;
+  flex: none;
+  border: 2px dashed var(--borde);
+  border-radius: 14px;
+  background: #fff;
+  overflow: hidden;
+}
+.logo-marco img { width: 100%; height: 100%; object-fit: contain; }
+.logo-marco img[hidden], .logo-vacio[hidden] { display: none; }
+.logo-vacio { font-size: .8rem; color: #6b7280; text-align: center; }
+.logo-botones { display: grid; gap: 8px; flex: 1; }
+.boton-archivo { display: flex; align-items: center; justify-content: center; position: relative; }
+.boton-archivo:focus-within { outline: 3px solid var(--primario); outline-offset: 2px; }
+
+/* Selector de tema */
+.temas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.temas legend { margin-bottom: 6px; padding: 0; }
+.tema-opcion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: var(--toque);
+  padding: 8px;
+  border: 2px solid var(--borde);
+  border-radius: 12px;
+  font-size: .85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tema-opcion input { position: absolute; opacity: 0; pointer-events: none; }
+.tema-opcion:has(input:checked) { border-color: var(--primario); background: var(--primario-suave); }
+.tema-opcion:has(input:focus-visible) { outline: 3px solid var(--primario); outline-offset: 2px; }
+.tema-muestra {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 0, 0, .1);
+}
+.tema-muestra[data-muestra="azul"] { background: #1e40af; }
+.tema-muestra[data-muestra="esmeralda"] { background: #047857; }
+.tema-muestra[data-muestra="naranja"] { background: #c2410c; }
+.tema-muestra[data-muestra="oscuro"] { background: linear-gradient(135deg, #0b1211 50%, #14b8a6 50%); }
+.cierre-periodo { font-size: .85rem; color: var(--texto-suave); }
+.boton-icono {
+  min-height: 40px;
+  width: 40px;
+  flex: none;
+  background: var(--tecla);
+  color: var(--texto);
+  font-size: 1.1rem;
+}
+.cierre-cuerpo { display: grid; gap: 8px; padding: 12px 14px; }
+.cierre-dato {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--fondo);
+  font-variant-numeric: tabular-nums;
+}
+.cierre-dato .cifra { text-align: right; }
+.cierre-detalle { grid-column: 1 / -1; font-size: .85rem; color: var(--texto-suave); }
+.cierre-detalle:empty { display: none; }
+.cierre-efectivo { background: var(--primario-suave); }
+.cierre-efectivo .cifra { color: var(--primario); }
+.cierre-banco { background: var(--bs-suave); }
+.cierre-banco .cifra { color: var(--bs); }
+.cierre-total { grid-template-columns: 1fr; border: 2px solid var(--primario); background: var(--superficie); }
+.cierre-total .cifra { text-align: left; color: var(--primario); }
+.cierre-mensaje {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--primario-suave);
+  color: var(--primario);
+  font-weight: 600;
+  text-align: center;
+}
+.cierre-mensaje[hidden] { display: none; }
+.cierre-acciones,
+.cierre-confirmacion {
+  display: grid;
+  gap: 8px;
+  padding: 0 14px calc(env(safe-area-inset-bottom) + 14px);
+}
+.cierre-acciones[hidden],
+.cierre-confirmacion[hidden] { display: none; }
+.cierre .boton-whatsapp { padding: 0 12px; font-size: 1.05rem; text-align: center; }
+.boton-whatsapp[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+.boton-peligro {
+  min-height: 52px;
+  background: var(--peligro-suave);
+  color: var(--peligro);
+  font-size: 1rem;
+}
+.cierre-confirmacion p {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--peligro-suave);
+  color: var(--peligro);
+  font-weight: 600;
+}
+.cierre-confirmacion-botones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cierre-confirmacion .boton-terciario { min-height: 52px; }
+.cierre-confirmacion .boton-peligro { background: var(--peligro); color: #fff; }
+:root[data-tema="oscuro"] .cierre-confirmacion .boton-peligro { color: #1f0606; }
+
+/* Aviso de ventas de días anteriores y anuladas en el cierre */
+.cierre-aviso { background: #fef3c7; color: #92400e; }
+:root[data-tema="oscuro"] .cierre-aviso { background: #3b2a06; color: #fcd34d; }
+.cierre-aviso[hidden], .cierre-anuladas[hidden] { display: none; }
+.cierre-anuladas { color: var(--peligro); font-weight: 600; }
+
+/* Confirmaciones dentro de un modal (respaldo, anular) */
+.confirmacion { display: grid; gap: 8px; }
+.confirmacion[hidden] { display: none; }
+.confirmacion p {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--peligro-suave);
+  color: var(--peligro);
+  font-weight: 600;
+}
+.confirmacion-botones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.confirmacion-botones .boton { min-height: 52px; }
+.boton-peligro-fuerte { background: var(--peligro); color: #fff; }
+:root[data-tema="oscuro"] .boton-peligro-fuerte { color: #1f0606; }
+
+/* Respaldo en Ajustes */
+.respaldo { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--borde); }
+.respaldo-botones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.respaldo-botones .boton { padding: 0 8px; font-size: .95rem; text-align: center; }
+.respaldo-mensaje {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--primario-suave);
+  color: var(--primario);
+  font-weight: 600;
+}
+.respaldo-mensaje[data-tipo="error"] { background: var(--peligro-suave); color: var(--peligro); }
+.respaldo-mensaje[hidden] { display: none; }
+/* Que el mensaje no quede debajo del botón fijo "Guardar ajustes" al desplazarlo a la vista. */
+.respaldo-mensaje, .respaldo .confirmacion { scroll-margin-bottom: 96px; }
+
+/* Anular en la lista de ventas */
+.venta { grid-template-columns: auto 1fr auto; }
+.venta-total { grid-column: 2; }
+.venta-accion { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+.venta-detalle { grid-column: 1 / 3; }
+.boton-anular {
+  min-height: 40px;
+  padding: 0 12px;
+  background: var(--peligro-suave);
+  color: var(--peligro);
+  font-size: .85rem;
+}
+.venta-anulada .venta-total,
+.venta-anulada .venta-detalle,
+.venta-anulada .venta-hora { text-decoration: line-through; opacity: .6; }
+.insignia-anulada {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--peligro-suave);
+  color: var(--peligro);
+  font-size: .75rem;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.insignia-anulada small { display: block; font-size: .7rem; font-weight: 600; }
+
+/* Historial de cierres */
+.modal-cuerpo[hidden] { display: none; }
+.historial-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.historial-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  width: 100%;
+  min-height: var(--toque);
+  padding: 10px 12px;
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+  background: var(--fondo);
+  color: var(--texto);
+  font: inherit;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.historial-item:focus-visible { outline: 3px solid var(--primario); outline-offset: 2px; }
+.historial-item strong { font-size: 1rem; }
+.historial-total { font-weight: 800; color: var(--primario); text-align: right; }
+.historial-sub { grid-column: 1 / -1; font-size: .85rem; color: var(--texto-suave); }
+.historial-vacio { color: var(--texto-suave); text-align: center; padding: 16px 0; }
+.boton-volver { justify-self: start; padding: 0 14px; min-height: 44px; }
+
+/* Pantallas más anchas: dos columnas */
+@media (min-width: 760px) {
+  .contenedor {
+    max-width: 920px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+    grid-template-rows: auto auto auto 1fr;
+  }
+  .pos { grid-column: 1; grid-row: 1 / span 4; }
+  .nueva-version, .pizarra, #registrar-venta, .recibo, .ventas { grid-column: 2; }
+}
+
+/* Aviso de nueva versión (lo muestra app.js cuando el Service Worker se actualiza) */
+.nueva-version {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--primario);
+  border-radius: 12px;
+  background: var(--primario-suave);
+  color: var(--texto);
+  font-size: .9rem;
+  font-weight: 600;
+}
+.nueva-version[hidden] { display: none; }
+.nueva-version .boton { min-height: 40px; padding: 0 14px; font-size: .9rem; }
+
+/*
+ * Teléfonos: los modales salen desde abajo como hojas (bottom sheet),
+ * al alcance del pulgar. En pantallas anchas siguen centrados.
+ */
+@media (max-width: 599px) {
+  .cierre, .modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92vh;
+    max-height: 92dvh;
+    margin: auto 0 0;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, .25);
+  }
+  .cierre[open], .modal[open] { animation: hoja-sube .22s ease-out; }
+  .cierre-cabecera, .modal-cabecera { padding-top: 22px; }
+  /* Asa decorativa: indica que es una hoja. */
+  .cierre-cabecera::before, .modal-cabecera::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 40px;
+    height: 4px;
+    margin-left: -20px;
+    border-radius: 2px;
+    background: var(--borde);
+  }
+  /* El historial no tiene barra de acciones: deja aire sobre la barra de gestos. */
+  #historial .modal-cuerpo { padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+}
+@keyframes hoja-sube {
+  from { transform: translateY(40%); opacity: .4; }
+  to { transform: none; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cierre[open], .modal[open] { animation: none; }
+  .boton { transition: none; }
+}

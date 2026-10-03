@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#047857">
+  <meta name="description" content="Cuadre: control de caja multimoneda offline para comercios.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Cuadre">
+  <title>Cuadre · Caja multimoneda</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    /* Tema antes del primer pintado: IndexedDB es asíncrona, así que app.js deja una copia del tema en localStorage. */
+    (function () {
+      var colores = { esmeralda: '#047857', azul: '#1e40af', naranja: '#c2410c', oscuro: '#151f1e' };
+      var tema = null;
+      try { tema = localStorage.getItem('cuadre-tema'); } catch (e) {}
+      if (!colores[tema]) tema = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'oscuro' : 'esmeralda';
+      document.documentElement.setAttribute('data-tema', tema);
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', colores[tema]);
+    })();
+  </script>
+</head>
+<body>
+  <header class="barra">
+    <h1 class="marca">
+      <img id="marca-logo" class="marca-logo" alt="" hidden>
+      <span id="marca-nombre" class="marca-nombre">Cuadre</span>
+    </h1>
+    <div class="barra-acciones">
+      <span id="estado-conexion" class="estado" role="status" aria-live="polite">—</span>
+      <button id="abrir-cierre" type="button" class="boton boton-barra" aria-haspopup="dialog">Cerrar Caja</button>
+      <button id="abrir-ajustes" type="button" class="boton boton-barra boton-barra-icono" aria-haspopup="dialog" aria-label="Ajustes del comercio">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="contenedor">
+    <!-- Aviso de nueva versión: app.js lo muestra cuando el Service Worker instala una versión nueva -->
+    <div id="nueva-version" class="nueva-version" role="status" hidden>
+      <span>Nueva versión disponible</span>
+      <button id="nueva-version-recargar" type="button" class="boton boton-secundario">Actualizar</button>
+    </div>
+
+    <!-- Pizarra de tasas: la BCV USD es la que usan los cálculos; EUR y Paralelo son referencia -->
+    <section class="tarjeta pizarra" aria-labelledby="tasa-titulo">
+      <div class="pizarra-cabecera">
+        <h2 id="tasa-titulo" class="etiqueta">Tasa BCV · USD</h2>
+        <button id="editar-tasas" type="button" class="boton boton-editar" aria-haspopup="dialog">Editar Tasas</button>
+      </div>
+      <p class="tasa-valor"><span id="tasa-actual">—</span> <small>Bs/USD</small></p>
+      <p id="tasa-fecha" class="tasa-fecha">Sin tasa registrada</p>
+      <div class="pizarra-secundarias">
+        <div class="tasa-secundaria">
+          <span class="etiqueta">Tasa EUR</span>
+          <span id="tasa-eur" class="tasa-sec-valor">—</span>
+          <span id="tasa-eur-fecha" class="tasa-sec-fecha"></span>
+        </div>
+        <div class="tasa-secundaria">
+          <span class="etiqueta">Paralelo / Binance</span>
+          <span id="tasa-paralelo" class="tasa-sec-valor">—</span>
+          <span id="tasa-paralelo-fecha" class="tasa-sec-fecha"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Calculadora de pagos mixtos -->
+    <section class="tarjeta pos" aria-labelledby="pos-titulo">
+      <div class="pos-cabecera">
+        <h2 id="pos-titulo" class="subtitulo">Calculadora de pago</h2>
+        <button type="button" class="boton boton-limpiar" data-key="limpiar">Limpiar</button>
+      </div>
+
+      <div class="campos">
+        <label class="campo">
+          <span class="etiqueta">Total factura USD</span>
+          <span class="campo-caja">
+            <span class="moneda">$</span>
+            <input id="total-usd" class="campo-activo" type="text" inputmode="none" readonly value="" placeholder="0" aria-label="Total de la factura en dólares">
+          </span>
+        </label>
+        <label class="campo">
+          <span class="etiqueta">Efectivo USD</span>
+          <span class="campo-caja">
+            <span class="moneda">$</span>
+            <input id="recibido-usd" type="text" inputmode="none" readonly value="" placeholder="0" aria-label="Efectivo recibido en dólares">
+          </span>
+        </label>
+      </div>
+
+      <!-- Resultado en pantalla grande -->
+      <div class="resultados" role="region" aria-labelledby="resultado-titulo" aria-live="polite">
+        <p class="resultado-linea">
+          <span class="etiqueta">Total en Bs</span>
+          <output id="total-bs" class="cifra">—</output>
+        </p>
+        <div id="resultado" class="resultado-destacado" data-modo="restante">
+          <span id="resultado-titulo" class="etiqueta">Restante a cobrar en Bs</span>
+          <output id="resultado-principal" class="cifra cifra-grande">—</output>
+          <output id="resultado-secundario" class="cifra-secundaria"></output>
+        </div>
+        <p id="aviso" class="aviso" role="alert"></p>
+      </div>
+
+      <div class="billetes" role="group" aria-label="Sumar billete al efectivo">
+        <button type="button" class="boton billete" data-billete="1">+$1</button>
+        <button type="button" class="boton billete" data-billete="5">+$5</button>
+        <button type="button" class="boton billete" data-billete="10">+$10</button>
+        <button type="button" class="boton billete" data-billete="20">+$20</button>
+        <button type="button" class="boton billete" data-billete="50">+$50</button>
+        <button type="button" class="boton billete" data-billete="100">+$100</button>
+      </div>
+
+      <div class="teclado" role="group" aria-label="Teclado numérico">
+        <button type="button" class="boton tecla" data-key="7">7</button>
+        <button type="button" class="boton tecla" data-key="8">8</button>
+        <button type="button" class="boton tecla" data-key="9">9</button>
+        <button type="button" class="boton tecla" data-key="4">4</button>
+        <button type="button" class="boton tecla" data-key="5">5</button>
+        <button type="button" class="boton tecla" data-key="6">6</button>
+        <button type="button" class="boton tecla" data-key="1">1</button>
+        <button type="button" class="boton tecla" data-key="2">2</button>
+        <button type="button" class="boton tecla" data-key="3">3</button>
+        <button type="button" class="boton tecla" data-key="." aria-label="Coma decimal">,</button>
+        <button type="button" class="boton tecla" data-key="0">0</button>
+        <button type="button" class="boton tecla tecla-accion" data-key="borrar" aria-label="Borrar último dígito">⌫</button>
+      </div>
+    </section>
+
+    <button id="registrar-venta" type="button" class="boton boton-primario">Cobrar</button>
+
+    <!-- Recibo exprés: aparece tras cobrar -->
+    <section id="recibo" class="tarjeta recibo" aria-labelledby="recibo-titulo" hidden>
+      <div id="recibo-comercio" class="recibo-comercio" hidden>
+        <img id="recibo-logo" class="recibo-logo" alt="" hidden>
+        <div class="recibo-comercio-texto">
+          <strong id="recibo-nombre"></strong>
+          <span id="recibo-contacto"></span>
+        </div>
+      </div>
+      <div class="recibo-cabecera">
+        <h2 id="recibo-titulo" class="subtitulo">Venta registrada</h2>
+        <span id="recibo-metodo" class="insignia"></span>
+      </div>
+      <dl id="recibo-detalle" class="recibo-detalle"></dl>
+      <a id="enviar-whatsapp" class="boton boton-whatsapp" href="#" target="_blank" rel="noopener">Enviar por WhatsApp</a>
+      <p id="recibo-nota" class="recibo-nota" hidden>Sin conexión: el mensaje se enviará cuando WhatsApp tenga internet.</p>
+      <button id="nueva-venta" type="button" class="boton boton-terciario">Nueva venta</button>
+    </section>
+
+    <!-- Ventas del día -->
+    <section class="tarjeta ventas" aria-labelledby="ventas-titulo">
+      <h2 id="ventas-titulo" class="subtitulo">Ventas de hoy</h2>
+      <div id="ventas-resumen" class="ventas-resumen">Sin ventas registradas</div>
+      <ul id="ventas-lista" class="ventas-lista"></ul>
+    </section>
+  </main>
+
+  <!-- Cierre de Caja -->
+  <dialog id="cierre" class="cierre" aria-labelledby="cierre-titulo">
+    <div class="cierre-cabecera">
+      <div>
+        <h2 id="cierre-titulo" class="subtitulo">Cierre de Caja</h2>
+        <p id="cierre-periodo" class="cierre-periodo"></p>
+      </div>
+      <button id="cierre-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar resumen">✕</button>
+    </div>
+
+    <div class="cierre-cuerpo">
+      <p id="cierre-aviso-dias" class="aviso cierre-aviso" role="alert" hidden></p>
+      <div class="cierre-dato">
+        <span class="etiqueta">Ventas realizadas</span>
+        <output id="cierre-cantidad" class="cifra">0</output>
+        <span id="cierre-cantidad-detalle" class="cierre-detalle"></span>
+        <span id="cierre-anuladas" class="cierre-detalle cierre-anuladas" hidden></span>
+      </div>
+      <div class="cierre-dato cierre-efectivo">
+        <span class="etiqueta">Efectivo en caja (USD)</span>
+        <output id="cierre-efectivo" class="cifra">$0,00</output>
+        <span id="cierre-efectivo-detalle" class="cierre-detalle"></span>
+      </div>
+      <div class="cierre-dato cierre-banco">
+        <span class="etiqueta">Banco · Pago Móvil</span>
+        <output id="cierre-banco" class="cifra">Bs 0,00</output>
+        <span id="cierre-banco-detalle" class="cierre-detalle"></span>
+      </div>
+      <div class="cierre-dato cierre-total">
+        <span class="etiqueta">Total general del día</span>
+        <output id="cierre-total" class="cifra cifra-grande">$0,00</output>
+        <span id="cierre-total-detalle" class="cierre-detalle"></span>
+      </div>
+      <p id="cierre-mensaje" class="cierre-mensaje" role="status" hidden></p>
+    </div>
+
+    <div id="cierre-acciones" class="cierre-acciones">
+      <a id="cierre-whatsapp" class="boton boton-whatsapp" href="#" target="_blank" rel="noopener">Enviar Cierre por WhatsApp</a>
+      <button id="cierre-archivar" type="button" class="boton boton-peligro">Limpiar Caja</button>
+      <button id="abrir-historial" type="button" class="boton boton-terciario" aria-haspopup="dialog">Ver cierres anteriores</button>
+    </div>
+
+    <div id="cierre-confirmacion" class="cierre-confirmacion" role="alertdialog" aria-labelledby="cierre-confirmacion-texto" hidden>
+      <p id="cierre-confirmacion-texto">Se archivarán estas ventas y la caja quedará en cero. Las ventas no se borran. ¿Continuar?</p>
+      <div class="cierre-confirmacion-botones">
+        <button id="cierre-cancelar" type="button" class="boton boton-terciario">Cancelar</button>
+        <button id="cierre-confirmar" type="button" class="boton boton-peligro">Sí, limpiar caja</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Historial de cierres -->
+  <dialog id="historial" class="modal" aria-labelledby="historial-titulo">
+    <div class="modal-cabecera">
+      <div>
+        <h2 id="historial-titulo" class="subtitulo">Cierres anteriores</h2>
+        <p id="historial-nota" class="modal-nota">Del más reciente al más antiguo.</p>
+      </div>
+      <button id="historial-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar">✕</button>
+    </div>
+    <div id="historial-vista-lista" class="modal-cuerpo">
+      <ul id="historial-lista" class="historial-lista"></ul>
+    </div>
+    <div id="historial-vista-detalle" class="modal-cuerpo" hidden>
+      <button id="historial-volver" type="button" class="boton boton-terciario boton-volver">‹ Volver a la lista</button>
+      <dl id="historial-detalle" class="recibo-detalle historial-detalle"></dl>
+      <a id="historial-whatsapp" class="boton boton-whatsapp" href="#" target="_blank" rel="noopener">Reenviar por WhatsApp</a>
+    </div>
+  </dialog>
+
+  <!-- Confirmar anulación de una venta -->
+  <dialog id="anular" class="modal" aria-labelledby="anular-titulo">
+    <div class="modal-cabecera">
+      <div>
+        <h2 id="anular-titulo" class="subtitulo">Anular venta</h2>
+        <p class="modal-nota">La venta no se borra: queda tachada en la lista y sale de los totales. No se puede deshacer.</p>
+      </div>
+      <button id="anular-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-cuerpo">
+      <dl id="anular-detalle" class="recibo-detalle"></dl>
+      <p id="anular-mensaje" class="aviso" role="alert"></p>
+    </div>
+    <div class="modal-acciones confirmacion-botones">
+      <button id="anular-cancelar" type="button" class="boton boton-terciario">Cancelar</button>
+      <button id="anular-confirmar" type="button" class="boton boton-peligro boton-peligro-fuerte">Sí, anular</button>
+    </div>
+  </dialog>
+
+  <!-- Editar Tasas -->
+  <dialog id="tasas" class="modal" aria-labelledby="tasas-titulo">
+    <form id="tasas-form" novalidate>
+      <div class="modal-cabecera">
+        <div>
+          <h2 id="tasas-titulo" class="subtitulo">Editar tasas</h2>
+          <p class="modal-nota">Escribe solo las que cambiaron. Se guarda la fecha y hora de cada cambio.</p>
+        </div>
+        <button id="tasas-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar">✕</button>
+      </div>
+      <div class="modal-cuerpo">
+        <label class="campo-texto">
+          <span class="etiqueta">Tasa BCV USD · usada para cobrar</span>
+          <input id="tasa-input" type="text" inputmode="decimal" autocomplete="off" placeholder="Ej. 36,50">
+        </label>
+        <label class="campo-texto">
+          <span class="etiqueta">Tasa EUR</span>
+          <input id="tasa-eur-input" type="text" inputmode="decimal" autocomplete="off" placeholder="Ej. 39,80">
+        </label>
+        <label class="campo-texto">
+          <span class="etiqueta">Tasa Paralelo / Binance</span>
+          <input id="tasa-paralelo-input" type="text" inputmode="decimal" autocomplete="off" placeholder="Ej. 42,10">
+        </label>
+        <p id="tasas-mensaje" class="aviso" role="alert"></p>
+      </div>
+      <div class="modal-acciones">
+        <button id="tasa-guardar" type="submit" class="boton boton-primario">Guardar tasas</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Ajustes del comercio -->
+  <dialog id="ajustes" class="modal" aria-labelledby="ajustes-titulo">
+    <form id="ajustes-form" novalidate>
+      <div class="modal-cabecera">
+        <div>
+          <h2 id="ajustes-titulo" class="subtitulo">Ajustes del comercio</h2>
+          <p class="modal-nota">Se guardan en este dispositivo y funcionan sin conexión.</p>
+        </div>
+        <button id="ajustes-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar">✕</button>
+      </div>
+      <div class="modal-cuerpo">
+        <label class="campo-texto">
+          <span class="etiqueta">Nombre del negocio</span>
+          <input id="ajuste-nombre" type="text" maxlength="60" autocomplete="organization" placeholder="Ej. Bodega La Esquina">
+        </label>
+        <label class="campo-texto">
+          <span class="etiqueta">RIF / Teléfono de contacto</span>
+          <input id="ajuste-contacto" type="text" maxlength="60" autocomplete="off" placeholder="Ej. J-12345678-9 · 0414-1234567">
+        </label>
+
+        <div class="logo-ajuste">
+          <span class="etiqueta">Logo</span>
+          <div class="logo-fila">
+            <div class="logo-marco">
+              <img id="ajuste-logo-vista" alt="Vista previa del logo" hidden>
+              <span id="ajuste-logo-vacio" class="logo-vacio">Sin logo</span>
+            </div>
+            <div class="logo-botones">
+              <label class="boton boton-terciario boton-archivo">
+                Cargar logo
+                <input id="ajuste-logo" type="file" accept="image/*" class="visualmente-oculto">
+              </label>
+              <button id="ajuste-logo-quitar" type="button" class="boton boton-terciario">Quitar</button>
+            </div>
+          </div>
+        </div>
+
+        <fieldset class="temas">
+          <legend class="etiqueta">Paleta de colores</legend>
+          <label class="tema-opcion"><input type="radio" name="tema" value="azul"><span class="tema-muestra" data-muestra="azul"></span>Azul Corporativo</label>
+          <label class="tema-opcion"><input type="radio" name="tema" value="esmeralda"><span class="tema-muestra" data-muestra="esmeralda"></span>Verde Esmeralda</label>
+          <label class="tema-opcion"><input type="radio" name="tema" value="naranja"><span class="tema-muestra" data-muestra="naranja"></span>Naranja Comercio</label>
+          <label class="tema-opcion"><input type="radio" name="tema" value="oscuro"><span class="tema-muestra" data-muestra="oscuro"></span>Modo Oscuro</label>
+        </fieldset>
+        <p id="ajustes-mensaje" class="aviso" role="alert"></p>
+
+        <section class="respaldo" aria-labelledby="respaldo-titulo">
+          <span id="respaldo-titulo" class="etiqueta">Respaldo de datos</span>
+          <p class="modal-nota">Guarda un archivo con todas las ventas, cierres y ajustes. Si cambias o limpias el teléfono, lo importas y recuperas todo.</p>
+          <div class="respaldo-botones">
+            <button id="respaldo-exportar" type="button" class="boton boton-terciario">Exportar respaldo</button>
+            <label class="boton boton-terciario boton-archivo">
+              Importar respaldo
+              <input id="respaldo-importar" type="file" accept=".json,application/json" class="visualmente-oculto">
+            </label>
+          </div>
+          <p id="respaldo-mensaje" class="respaldo-mensaje" role="status" hidden></p>
+          <div id="respaldo-confirmacion" class="confirmacion" role="alertdialog" aria-labelledby="respaldo-confirmacion-texto" hidden>
+            <p id="respaldo-confirmacion-texto"></p>
+            <div class="confirmacion-botones">
+              <button id="respaldo-cancelar" type="button" class="boton boton-terciario">Cancelar</button>
+              <button id="respaldo-confirmar" type="button" class="boton boton-peligro boton-peligro-fuerte">Sí, reemplazar</button>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="modal-acciones">
+        <button id="ajustes-guardar" type="submit" class="boton boton-primario">Guardar ajustes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="db.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
