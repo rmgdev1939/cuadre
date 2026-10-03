@@ -7,7 +7,8 @@
  *   - 'ventas' { id (autoIncrement), totalUsd, recibidoUsd, vueltoUsd, vueltoBs, tasa, fecha (ISO), dia ('YYYY-MM-DD' local),
  *                totalBs, efectivoUsd, restanteUsd, restanteBs, metodo ('efectivo' | 'mixto' | 'pago-movil'),
  *                tasaEur, tasaParalelo, cierreId, anuladaEn,
- *                canalBs ('pago-movil' | 'punto'), referencia, verificadaEn, verificacion ('sms' | 'manual'), refBanco }
+ *                canalBs ('pago-movil' | 'punto'), referencia, verificadaEn, verificacion ('sms' | 'manual'), refBanco,
+ *                items: [{ productoId, nombre, precioUsd, cantidad }] }
  *       Los campos de la segunda línea llegaron con el pago mixto; las ventas anteriores no los tienen.
  *       tasaEur y tasaParalelo son solo referencia para el recibo (opcionales); los cálculos usan `tasa` (BCV USD).
  *       cierreId solo existe en ventas archivadas por un cierre de caja; sin él, la venta está "abierta".
@@ -23,6 +24,9 @@
  *       'tasa-paralelo' { clave, valor, fecha }  → tasa Paralelo/Binance (referencia)
  *       'comercio'      { clave, nombre, contacto, logo (data URL Base64 o null), tema,
  *                         pmBanco (código, p. ej. '0134'), pmTelefono, pmDocumento }  → datos de Pago Móvil del comercio
+ *       'catalogo'      { clave, sigId, lista: [{ id, nombre, precioUsd, stock (número o null = sin control), activo }] }
+ *                       → inventario. Vender con items descuenta stock en la misma transacción; anular lo devuelve.
+ *                         Eliminar un producto solo lo marca activo:false (las ventas viejas conservan su nombre).
  *       'pagos-recibidos' { clave, lista: [{ referencia, montoBs, banco, recibido (ISO), texto, ventaId|null }] }
  *                       → pagos leídos de los SMS del banco; ventaId = venta que verificaron (cada pago verifica una sola).
  *       Las claves nuevas no requieren cambiar la versión de la base.
@@ -163,14 +167,26 @@
   }
 
   // ---------- Ajustes del comercio ----------
-  var TEMAS = ['esmeralda', 'azul', 'naranja', 'oscuro'];
-  var AJUSTES_VACIOS = { nombre: '', contacto: '', logo: null, tema: null, pmBanco: '', pmTelefono: '', pmDocumento: '' };
+  var TEMAS = ['esmeralda', 'azul', 'naranja', 'oscuro', 'logo'];
+  var AJUSTES_VACIOS = {
+    nombre: '', contacto: '', logo: null, tema: null, pmBanco: '', pmTelefono: '', pmDocumento: '',
+    colores: null,      // paleta sacada del logo { primario, primarioOscuro, primarioSuave, fondo, bs, bsSuave, tecla, teclaActiva }
+    registrado: false   // true tras el registro inicial
+  };
+  var CLAVES_COLORES = ['primario', 'primarioOscuro', 'primarioSuave', 'fondo', 'bs', 'bsSuave', 'tecla', 'teclaActiva'];
+
+  function coloresValidos(c) {
+    return c !== null && typeof c === 'object' && CLAVES_COLORES.every(function (k) { return /^#[0-9a-f]{6}$/i.test(c[k]); });
+  }
   var CAMPOS_TEXTO = ['nombre', 'contacto', 'pmBanco', 'pmTelefono', 'pmDocumento'];
 
   function normalizarAjustes(r) {
     var a = Object.assign({}, AJUSTES_VACIOS, r || {});
     delete a.clave;
     if (TEMAS.indexOf(a.tema) === -1) a.tema = null; // null = aún no elegido
+    if (!coloresValidos(a.colores)) a.colores = null;
+    if (a.tema === 'logo' && !a.colores) a.tema = null;
+    a.registrado = !!a.registrado;
     return a;
   }
 
@@ -192,6 +208,12 @@
     });
     if (permitido.tema != null && TEMAS.indexOf(permitido.tema) === -1) {
       return Promise.reject(new Error('Tema desconocido: ' + permitido.tema));
+    }
+    if (permitido.colores != null && !coloresValidos(permitido.colores)) {
+      return Promise.reject(new Error('Colores inválidos.'));
+    }
+    if (permitido.tema === 'logo' && permitido.colores === null) {
+      return Promise.reject(new Error('El tema del logo necesita colores.'));
     }
     if (permitido.logo != null && !/^data:image\//.test(permitido.logo)) {
       return Promise.reject(new Error('El logo debe ser una imagen en Base64 (data URL).'));
@@ -239,8 +261,108 @@
     // Pago Móvil / Punto de venta (opcionales).
     if (venta.canalBs === 'pago-movil' || venta.canalBs === 'punto') registro.canalBs = venta.canalBs;
     if (venta.referencia) registro.referencia = String(venta.referencia).replace(/\D/g, '').slice(0, 20);
-    return conStore(STORE_VENTAS, 'readwrite', function (store) {
-      return store.add(registro);
+    var items = normalizarItems(venta.items);
+    if (!items.length) {
+      return conStore(STORE_VENTAS, 'readwrite', function (store) {
+        return store.add(registro);
+      });
+    }
+    registro.items = items;
+    // Con productos: la venta y el descuento de stock van juntos (o todo, o nada).
+    return abrir().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([STORE_VENTAS, STORE_CONFIG], 'readwrite');
+        var id;
+        tx.oncomplete = function () { resolve(id); };
+        tx.onerror = function () { reject(tx.error); };
+        tx.onabort = function () { reject(tx.error || new Error('Transacción abortada')); };
+        tx.objectStore(STORE_VENTAS).add(registro).onsuccess = function (e) { id = e.target.result; };
+        moverStock(tx.objectStore(STORE_CONFIG), items, -1);
+      });
+    });
+  }
+
+  function normalizarItems(items) {
+    if (!Array.isArray(items)) return [];
+    return items.filter(function (it) { return it && Number(it.cantidad) > 0; }).map(function (it) {
+      return {
+        productoId: Number(it.productoId), nombre: String(it.nombre || ''),
+        precioUsd: Number(it.precioUsd) || 0, cantidad: Number(it.cantidad)
+      };
+    });
+  }
+
+  /** Suma (signo +1) o resta (−1) las cantidades de `items` al stock de los productos que lo controlan. */
+  function moverStock(config, items, signo) {
+    config.get(CLAVE_CATALOGO).onsuccess = function (e) {
+      var cat = e.target.result;
+      if (!cat || !Array.isArray(cat.lista)) return;
+      var cambio = false;
+      items.forEach(function (it) {
+        var p = cat.lista.filter(function (x) { return x.id === it.productoId; })[0];
+        if (p && p.stock != null) { p.stock = Math.round((p.stock + signo * it.cantidad) * 1000) / 1000; cambio = true; }
+      });
+      if (cambio) config.put(cat);
+    };
+  }
+
+  // ---------- Inventario ----------
+  var CLAVE_CATALOGO = 'catalogo';
+
+  /** Productos activos, ordenados por nombre. */
+  function obtenerCatalogo() {
+    return conStore(STORE_CONFIG, 'readonly', function (store) {
+      return store.get(CLAVE_CATALOGO);
+    }).then(function (r) {
+      return ((r && r.lista) || []).filter(function (p) { return p.activo !== false; })
+        .sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); });
+    });
+  }
+
+  /** Lee y reescribe el catálogo en una transacción. `cambiar(cat)` devuelve el resultado a entregar. */
+  function conCatalogo(cambiar) {
+    return abrir().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(STORE_CONFIG, 'readwrite');
+        var store = tx.objectStore(STORE_CONFIG);
+        var salida, error;
+        tx.oncomplete = function () { resolve(salida); };
+        tx.onerror = function () { reject(error || tx.error); };
+        tx.onabort = function () { reject(error || tx.error || new Error('Transacción abortada')); };
+        store.get(CLAVE_CATALOGO).onsuccess = function (e) {
+          var cat = e.target.result || { clave: CLAVE_CATALOGO, sigId: 1, lista: [] };
+          try { salida = cambiar(cat); } catch (err) { error = err; tx.abort(); return; }
+          store.put(cat);
+        };
+      });
+    });
+  }
+
+  /** Crea o edita un producto { id?, nombre, precioUsd, stock (número o null) }. Devuelve el producto guardado. */
+  function guardarProducto(datos) {
+    var nombre = String(datos && datos.nombre || '').trim().slice(0, 60);
+    var precio = Math.round(Number(datos && datos.precioUsd) * 100) / 100;
+    var stock = datos && datos.stock != null && datos.stock !== '' ? Number(datos.stock) : null;
+    if (!nombre) return Promise.reject(new Error('Escribe el nombre del producto.'));
+    if (!isFinite(precio) || precio <= 0) return Promise.reject(new Error('Escribe un precio mayor que cero.'));
+    if (stock != null && !isFinite(stock)) return Promise.reject(new Error('El stock debe ser un número.'));
+    return conCatalogo(function (cat) {
+      var p = datos.id != null ? cat.lista.filter(function (x) { return x.id === Number(datos.id); })[0] : null;
+      if (datos.id != null && !p) throw new Error('El producto ya no existe.');
+      if (!p) { p = { id: cat.sigId++, activo: true }; cat.lista.push(p); }
+      p.nombre = nombre;
+      p.precioUsd = precio;
+      p.stock = stock;
+      return Object.assign({}, p);
+    });
+  }
+
+  /** Quita un producto del inventario (queda inactivo; las ventas que lo usaron no cambian). */
+  function eliminarProducto(id) {
+    return conCatalogo(function (cat) {
+      var p = cat.lista.filter(function (x) { return x.id === Number(id); })[0];
+      if (p) p.activo = false;
+      return true;
     });
   }
 
@@ -348,6 +470,15 @@
     });
   }
 
+  /** Ventas (abiertas y archivadas) entre dos días 'YYYY-MM-DD' inclusive, ordenadas por id. */
+  function ventasEntre(desde, hasta) {
+    return conStore(STORE_VENTAS, 'readonly', function (store) {
+      return store.index('dia').getAll(IDBKeyRange.bound(desde, hasta));
+    }).then(function (lista) {
+      return (lista || []).sort(function (a, b) { return a.id - b.id; });
+    });
+  }
+
   /** Ventas aún no archivadas por un cierre (de cualquier día), ordenadas por id. */
   function ventasAbiertas() {
     return conStore(STORE_VENTAS, 'readonly', function (store) {
@@ -404,7 +535,7 @@
   function anularVenta(id) {
     return abrir().then(function (db) {
       return new Promise(function (resolve, reject) {
-        var tx = db.transaction(STORE_VENTAS, 'readwrite');
+        var tx = db.transaction([STORE_VENTAS, STORE_CONFIG], 'readwrite');
         var store = tx.objectStore(STORE_VENTAS);
         var venta, error;
         tx.oncomplete = function () { if (error) reject(error); else resolve(venta); };
@@ -417,6 +548,7 @@
           if (venta.anuladaEn) return;
           venta.anuladaEn = new Date().toISOString();
           store.put(venta);
+          if (venta.items && venta.items.length) moverStock(tx.objectStore(STORE_CONFIG), venta.items, +1);
         };
       });
     });
@@ -551,12 +683,16 @@
     registrarVenta: registrarVenta,
     ventasDelDia: ventasDelDia,
     ventasAbiertas: ventasAbiertas,
+    ventasEntre: ventasEntre,
     archivarVentas: archivarVentas,
     cierres: cierres,
     anularVenta: anularVenta,
     pagosRecibidos: pagosRecibidos,
     guardarPagoRecibido: guardarPagoRecibido,
     verificarVenta: verificarVenta,
+    obtenerCatalogo: obtenerCatalogo,
+    guardarProducto: guardarProducto,
+    eliminarProducto: eliminarProducto,
     exportarRespaldo: exportarRespaldo,
     validarRespaldo: validarRespaldo,
     importarRespaldo: importarRespaldo,

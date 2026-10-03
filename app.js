@@ -11,6 +11,8 @@
  * Los Bs se cobran por Pago Móvil o Punto de venta. El Pago Móvil abre una hoja con el monto exacto,
  * los datos del comercio y la referencia; la venta queda "por verificar" hasta emparejarla con el SMS
  * del banco del comerciante (compartido a la app o pegado; pagomovil.js lo lee).
+ * Inventario opcional: se cobra tocando productos (el total sale de ellos y el stock baja solo) o
+ * tecleando el monto como siempre. El dashboard resume ventas, métodos y productos por período.
  *
  * Todos los montos se manejan en centavos enteros para evitar errores de coma
  * flotante; solo se convierten a decimales al mostrarlos o guardarlos.
@@ -31,6 +33,9 @@
     entrada: { total: '', recibido: '' }, // texto tecleado, p. ej. "12.5"
     canalBs: 'pago-movil',   // cómo se cobran los Bs: 'pago-movil' | 'punto'
     pagos: [],               // pagos recibidos leídos de SMS (copia de CuadreDB.pagosRecibidos)
+    catalogo: [],            // productos activos (copia de CuadreDB.obtenerCatalogo)
+    carrito: {},             // productoId → cantidad de la venta en curso
+    dashPeriodo: 'hoy',      // 'hoy' | '7' | '30'
     recibo: null             // última venta cobrada, para el Recibo Exprés
   };
 
@@ -170,22 +175,169 @@
   }
 
   // ---------- Ajustes del comercio (marca y tema) ----------
-  var COLOR_BARRA = { esmeralda: '#047857', azul: '#1e40af', naranja: '#c2410c', oscuro: '#151f1e' };
+  var COLOR_BARRA = { esmeralda: '#047857', azul: '#1e40af', naranja: '#c2410c', oscuro: '#151f1e', logo: null };
+  var VARIABLES_LOGO = {
+    primario: '--primario', primarioOscuro: '--primario-oscuro', primarioSuave: '--primario-suave', fondo: '--fondo',
+    bs: '--bs', bsSuave: '--bs-suave', tecla: '--tecla', teclaActiva: '--tecla-activa'
+  };
   var LOGO_MAX_PX = 256;
   var LOGO_MAX_BYTES = 10 * 1024 * 1024;
   var logoPendiente; // undefined = sin cambios · null = quitar · string = nuevo logo (data URL)
+  var coloresPendientes = null; // paleta del logo recién elegido, aún sin guardar
 
   function temaActual() {
     return document.documentElement.getAttribute('data-tema') || 'esmeralda';
   }
 
-  /** Aplica el tema al instante y deja una copia en localStorage para pintarlo antes de que cargue IndexedDB. */
-  function aplicarTema(tema) {
-    if (!COLOR_BARRA[tema]) return;
-    document.documentElement.setAttribute('data-tema', tema);
+  /**
+   * Aplica el tema al instante y deja una copia en localStorage para pintarlo antes de que cargue IndexedDB.
+   * 'logo' usa los colores sacados del logo (`colores`); los demás temas limpian esos colores.
+   */
+  function aplicarTema(tema, colores) {
+    if (!(tema in COLOR_BARRA)) return;
+    var propios = tema === 'logo' ? (colores || estado.comercio.colores) : null;
+    if (tema === 'logo' && !propios) return;
+    var raiz = document.documentElement;
+    raiz.setAttribute('data-tema', tema);
+    Object.keys(VARIABLES_LOGO).forEach(function (k) {
+      if (propios) raiz.style.setProperty(VARIABLES_LOGO[k], propios[k]);
+      else raiz.style.removeProperty(VARIABLES_LOGO[k]);
+    });
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', COLOR_BARRA[tema]);
-    try { localStorage.setItem('cuadre-tema', tema); } catch (e) { /* modo privado: no pasa nada */ }
+    if (meta) meta.setAttribute('content', propios ? propios.primario : COLOR_BARRA[tema]);
+    try {
+      localStorage.setItem('cuadre-tema', tema);
+      if (propios) localStorage.setItem('cuadre-colores', JSON.stringify(propios));
+    } catch (e) { /* modo privado: no pasa nada */ }
+  }
+
+  // ---------- Colores desde el logo ----------
+  function hexARgb(hex) {
+    var n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function rgbAHex(rgb) {
+    return '#' + rgb.map(function (v) { return ('0' + Math.round(Math.max(0, Math.min(255, v))).toString(16)).slice(-2); }).join('');
+  }
+  function rgbAHsl(rgb) {
+    var r = rgb[0] / 255, g = rgb[1] / 255, b = rgb[2] / 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, h = 0, s = 0;
+    if (max !== min) {
+      var d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h *= 60;
+    }
+    return [h, s, l];
+  }
+  function hslAHex(h, s, l) {
+    function f(n) {
+      var k = (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+      return 255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)));
+    }
+    return rgbAHex([f(0), f(8), f(4)]);
+  }
+  function luminancia(hex) {
+    var c = hexARgb(hex).map(function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+  function contraste(a, b) {
+    var la = luminancia(a), lb = luminancia(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  /**
+   * Color dominante "con color" del logo: ignora fondos transparentes, blancos, negros y grises,
+   * agrupa por tono y se queda con el grupo de más peso. Devuelve '#rrggbb' o null si el logo es gris.
+   */
+  function colorDominante(dataUrl) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        var lado = 64;
+        var lienzo = document.createElement('canvas');
+        lienzo.width = lado; lienzo.height = lado;
+        var ctx = lienzo.getContext('2d');
+        ctx.drawImage(img, 0, 0, lado, lado);
+        var px;
+        try { px = ctx.getImageData(0, 0, lado, lado).data; } catch (e) { return resolve(null); }
+        var grupos = {};
+        for (var i = 0; i < px.length; i += 4) {
+          if (px[i + 3] < 200) continue;
+          var rgb = [px[i], px[i + 1], px[i + 2]];
+          var hsl = rgbAHsl(rgb);
+          if (hsl[1] < 0.25 || hsl[2] < 0.1 || hsl[2] > 0.92) continue;
+          var k = Math.floor(hsl[0] / 15) % 24;
+          var peso = hsl[1] * (1 - Math.abs(hsl[2] - 0.5));
+          var g = grupos[k] || (grupos[k] = { peso: 0, r: 0, g: 0, b: 0, n: 0 });
+          g.peso += peso; g.r += rgb[0]; g.g += rgb[1]; g.b += rgb[2]; g.n++;
+        }
+        var mejor = null;
+        Object.keys(grupos).forEach(function (k) { if (!mejor || grupos[k].peso > mejor.peso) mejor = grupos[k]; });
+        // Menos de ~1 % de píxeles con color: el logo es en blanco y negro.
+        if (!mejor || mejor.n < lado * lado * 0.01) return resolve(null);
+        resolve(rgbAHex([mejor.r / mejor.n, mejor.g / mejor.n, mejor.b / mejor.n]));
+      };
+      img.onerror = function () { resolve(null); };
+      img.src = dataUrl;
+    });
+  }
+
+  /**
+   * Paleta completa y legible a partir del color del logo: el principal se oscurece hasta que el texto
+   * blanco sobre él tenga contraste 4,5:1 (AA); el resto son tintes del mismo tono. El color de los Bs
+   * se aleja del tono del logo para que efectivo y bolívares nunca se confundan.
+   */
+  function paletaDesdeColor(hex) {
+    var hsl = rgbAHsl(hexARgb(hex));
+    var h = hsl[0], s = Math.max(0.45, Math.min(0.85, hsl[1])), l = Math.min(hsl[2], 0.5);
+    var primario = hslAHex(h, s, l);
+    while (contraste(primario, '#ffffff') < 4.5 && l > 0.08) { l -= 0.02; primario = hslAHex(h, s, l); }
+    var azulado = h >= 190 && h <= 255;
+    return {
+      primario: primario,
+      primarioOscuro: hslAHex(h, s, Math.max(0.06, l - 0.08)),
+      primarioSuave: hslAHex(h, Math.min(s, 0.7), 0.92),
+      fondo: hslAHex(h, 0.18, 0.965),
+      tecla: hslAHex(h, 0.16, 0.935),
+      teclaActiva: hslAHex(h, 0.2, 0.87),
+      bs: azulado ? '#6d28d9' : '#1d4ed8',
+      bsSuave: azulado ? '#ede9fe' : '#dbeafe'
+    };
+  }
+
+  function coloresDeLogo(dataUrl) {
+    if (!dataUrl) return Promise.resolve(null);
+    return colorDominante(dataUrl).then(function (hex) { return hex ? paletaDesdeColor(hex) : null; });
+  }
+
+  /** Muestras de la paleta bajo el logo. */
+  function pintarPaleta(nodo, colores, sinColor) {
+    nodo.innerHTML = '';
+    nodo.hidden = !colores && !sinColor;
+    if (!colores) {
+      if (sinColor) nodo.textContent = 'Tu logo no tiene colores fuertes: Cuadre usará Verde Esmeralda.';
+      return;
+    }
+    [['primario', 'Principal'], ['primarioSuave', 'Suave'], ['bs', 'Bolívares']].forEach(function (c) {
+      var m = document.createElement('span');
+      m.className = 'paleta-muestra';
+      m.innerHTML = '<span class="paleta-color"></span><span></span>';
+      m.firstChild.style.background = colores[c[0]];
+      m.lastChild.textContent = c[1];
+      nodo.appendChild(m);
+    });
+    var t = document.createElement('span');
+    t.className = 'paleta-texto';
+    t.textContent = 'Cuadre usará estos colores.';
+    nodo.appendChild(t);
+  }
+
+  function pintarOpcionLogo() {
+    var c = estado.comercio.colores;
+    var visible = !!(c || coloresPendientes);
+    el.temaLogoOpcion.hidden = !visible;
+    if (visible) el.temaLogoMuestra.style.background = (coloresPendientes || c).primario;
   }
 
   /** Nombre y logo del comercio en la barra superior. */
@@ -204,9 +356,10 @@
     el.ajusteLogoQuitar.disabled = !dataUrl;
   }
 
-  function mensajeAjustes(texto) {
+  function mensajeAjustes(texto, ok) {
     el.ajustesMensaje.textContent = texto || '';
     el.ajustesMensaje.hidden = !texto;
+    el.ajustesMensaje.setAttribute('data-tipo', ok ? 'ok' : 'error');
   }
 
   /** Reduce la imagen a 256 px como máximo y la devuelve en Base64 (PNG, conserva transparencia). */
@@ -234,9 +387,13 @@
     });
   }
 
+  /** Llena el formulario de Ajustes con lo guardado. */
   function abrirAjustes() {
     if (!el.ajustes) return;
     var c = estado.comercio;
+    coloresPendientes = null;
+    pintarPaleta(el.ajustePaleta, null);
+    pintarOpcionLogo();
     el.ajusteNombre.value = c.nombre || '';
     el.ajusteContacto.value = c.contacto || '';
     el.ajustePmBanco.value = c.pmBanco || '';
@@ -251,8 +408,6 @@
     respaldoPendiente = null;
     mostrarConfirmacionRespaldo('');
     mensajeRespaldo('');
-    if (!el.ajustes.open) el.ajustes.showModal();
-    el.ajustesCerrar.focus();
   }
 
   function elegirLogo() {
@@ -262,6 +417,16 @@
     procesarLogo(archivo).then(function (dataUrl) {
       logoPendiente = dataUrl;
       vistaLogo(dataUrl);
+      return coloresDeLogo(dataUrl).then(function (colores) {
+        coloresPendientes = colores;
+        pintarPaleta(el.ajustePaleta, colores, !colores);
+        pintarOpcionLogo();
+        // Vista previa inmediata con los colores del logo; se guarda con "Guardar ajustes".
+        if (colores) {
+          aplicarTema('logo', colores);
+          Array.prototype.forEach.call(el.ajustesTemas, function (r) { r.checked = r.value === 'logo'; });
+        }
+      });
     }).catch(function (e) {
       mensajeAjustes(e.message);
     }).then(function () {
@@ -272,14 +437,22 @@
   function quitarLogo() {
     logoPendiente = null;
     vistaLogo(null);
+    coloresPendientes = null;
+    pintarPaleta(el.ajustePaleta, null);
   }
 
   /** El tema se aplica y se guarda al tocarlo, sin esperar a "Guardar ajustes". */
   function elegirTema(e) {
     var tema = e.target.value;
-    aplicarTema(tema);
-    DB.guardarAjustes({ tema: tema }).then(function (a) {
+    var cambios = { tema: tema };
+    if (tema === 'logo') {
+      if (!coloresPendientes && !estado.comercio.colores) return;
+      if (coloresPendientes) cambios.colores = coloresPendientes;
+    }
+    aplicarTema(tema, cambios.colores);
+    DB.guardarAjustes(cambios).then(function (a) {
       estado.comercio.tema = a.tema;
+      estado.comercio.colores = a.colores;
     }).catch(function (err) {
       console.error(err);
       mensajeAjustes('No se pudo guardar el tema.');
@@ -293,13 +466,16 @@
       pmBanco: el.ajustePmBanco.value, pmTelefono: el.ajustePmTelefono.value, pmDocumento: el.ajustePmDocumento.value
     };
     if (logoPendiente !== undefined) cambios.logo = logoPendiente;
+    if (coloresPendientes) cambios.colores = coloresPendientes;
+    if (temaActual() === 'logo') cambios.tema = 'logo';
     el.ajustesGuardar.disabled = true;
     DB.guardarAjustes(cambios).then(function (a) {
       estado.comercio = a;
       logoPendiente = undefined;
+      coloresPendientes = null;
       pintarMarca();
       if (estado.recibo) mostrarRecibo(estado.recibo, true);
-      el.ajustes.close();
+      mensajeAjustes('Ajustes guardados ✓', true);
     }).catch(function (err) {
       console.error(err);
       mensajeAjustes('No se pudieron guardar los ajustes. Intenta de nuevo.');
@@ -327,6 +503,10 @@
     if (tecla === 'limpiar') {
       ocultarRecibo();
       limpiarFormulario();
+      return;
+    }
+    if (campo === 'total' && hayCarrito()) {
+      avisar('El total sale de los productos. Toca «Quitar» para teclearlo a mano.');
       return;
     }
     empezarEdicion();
@@ -362,6 +542,8 @@
     estado.entrada.total = '';
     estado.entrada.recibido = '';
     estado.canalBs = 'pago-movil';
+    estado.carrito = {};
+    pintarCarrito();
     activarCampo('total');
     recalcular();
   }
@@ -501,6 +683,7 @@
     if (estado.tasasRef.eur) venta.tasaEur = estado.tasasRef.eur.valor;
     if (estado.tasasRef.paralelo) venta.tasaParalelo = estado.tasasRef.paralelo.valor;
     if (r.restanteBs > 0) venta.canalBs = estado.canalBs;
+    if (hayCarrito()) venta.items = itemsCarrito();
 
     // Pago Móvil: primero la hoja con el monto exacto, los datos del comercio y la referencia.
     if (venta.canalBs === 'pago-movil') return abrirCobroPM(venta);
@@ -853,11 +1036,14 @@
   /** Líneas [etiqueta, valor] del resumen, compartidas por la pantalla y WhatsApp. */
   function lineasRecibo(v) {
     var d = desglose(v);
-    var lineas = [
-      ['Fecha', fmtFechaRecibo.format(new Date(v.fecha))],
+    var lineas = [['Fecha', fmtFechaRecibo.format(new Date(v.fecha))]];
+    (v.items || []).forEach(function (it) {
+      lineas.push([fmtCantidad(it.cantidad) + ' × ' + it.nombre, usd(Math.round(cent(it.precioUsd) * it.cantidad))]);
+    });
+    lineas.push(
       ['Total USD', usd(d.totalUsd)],
       ['Tasa BCV', 'Bs ' + fmtTasa.format(v.tasa) + ' por USD']
-    ];
+    );
     if (v.tasaEur) lineas.push(['Tasa EUR', 'Bs ' + fmtTasa.format(v.tasaEur) + ' por EUR']);
     if (v.tasaParalelo) lineas.push(['Tasa Paralelo', 'Bs ' + fmtTasa.format(v.tasaParalelo) + ' por USD']);
     lineas.push(['Total en Bs', bs(d.totalBs)]);
@@ -988,7 +1174,7 @@
             boton.textContent = 'Anular';
             li.children[2].appendChild(boton);
           }
-          li.children[3].textContent = detalleVenta(d);
+          li.children[3].textContent = (v.items && v.items.length ? resumenItems(v.items) + ' · ' : '') + detalleVenta(d);
           if (estadoPm) { li.children[3].appendChild(document.createTextNode(' ')); li.children[3].appendChild(estadoPm); }
           el.ventasLista.appendChild(li);
         });
@@ -1509,6 +1695,556 @@
     mensajeRespaldo('Importación cancelada. Tus datos no cambiaron.');
   }
 
+  // ---------- Vistas (menú inferior) ----------
+  var vistaActual = 'caja';
+
+  function irA(vista) {
+    var secciones = { caja: el.vistaCaja, resumen: el.vistaResumen, inventario: el.vistaInventario, ajustes: el.vistaAjustes, registro: el.vistaRegistro };
+    if (!secciones[vista]) return;
+    vistaActual = vista;
+    Object.keys(secciones).forEach(function (k) { if (secciones[k]) secciones[k].hidden = k !== vista; });
+    el.menu.hidden = vista === 'registro';
+    el.abrirCierre.hidden = vista !== 'caja';
+    Array.prototype.forEach.call(el.menu.querySelectorAll('[data-vista]'), function (b) {
+      if (b.getAttribute('data-vista') === vista) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
+    document.body.setAttribute('data-vista', vista);
+    window.scrollTo(0, 0);
+    if (vista === 'resumen') pintarDashboard();
+    if (vista === 'ajustes') abrirAjustes();
+    if (vista === 'inventario') cargarCatalogo().then(function () { pintarInventario(); nuevoProducto(); });
+  }
+
+  // ---------- Registro inicial ----------
+  var registroLogo = null, registroColores = null;
+
+  function mensajeRegistro(texto) {
+    el.registroMensaje.textContent = texto || '';
+    el.registroMensaje.hidden = !texto;
+  }
+
+  function elegirLogoRegistro() {
+    var archivo = el.registroLogo.files && el.registroLogo.files[0];
+    if (!archivo) return;
+    mensajeRegistro('');
+    procesarLogo(archivo).then(function (dataUrl) {
+      registroLogo = dataUrl;
+      el.registroLogoVista.src = dataUrl;
+      el.registroLogoVista.hidden = false;
+      el.registroLogoVacio.hidden = true;
+      return coloresDeLogo(dataUrl);
+    }).then(function (colores) {
+      if (registroLogo === null) return;
+      registroColores = colores;
+      pintarPaleta(el.registroPaleta, colores, !colores);
+      aplicarTema(colores ? 'logo' : 'esmeralda', colores);
+    }).catch(function (e) {
+      mensajeRegistro(e.message);
+    }).then(function () {
+      el.registroLogo.value = '';
+    });
+  }
+
+  function crearCuenta(e) {
+    if (e) e.preventDefault();
+    var nombre = el.registroNombre.value.trim();
+    var tasa = parsearTasa(el.registroTasa.value);
+    if (!nombre) { mensajeRegistro('Escribe el nombre de tu negocio.'); el.registroNombre.focus(); return; }
+    if (!isFinite(tasa) || tasa <= 0) { mensajeRegistro('Escribe la tasa BCV de hoy, por ejemplo 36,50.'); el.registroTasa.focus(); return; }
+    var cambios = {
+      nombre: nombre, contacto: el.registroContacto.value, registrado: true,
+      pmBanco: el.registroPmBanco.value, pmTelefono: el.registroPmTelefono.value, pmDocumento: el.registroPmDocumento.value,
+      tema: registroColores ? 'logo' : temaActual() === 'logo' ? 'esmeralda' : temaActual()
+    };
+    if (registroLogo) cambios.logo = registroLogo;
+    if (registroColores) cambios.colores = registroColores;
+    el.registroCrear.disabled = true;
+    DB.guardarTasa(tasa, 'bcv').then(function (t) {
+      estado.tasa = t;
+      return DB.guardarAjustes(cambios);
+    }).then(function (a) {
+      estado.comercio = a;
+      aplicarTema(a.tema || 'esmeralda', a.colores);
+      pintarMarca();
+      mostrarTasa();
+      recalcular();
+      irA('caja');
+    }).catch(function (err) {
+      console.error(err);
+      mensajeRegistro('No se pudo crear la cuenta. Intenta de nuevo.');
+    }).then(function () {
+      el.registroCrear.disabled = false;
+    });
+  }
+
+  // ---------- Inventario y productos de la venta ----------
+  var fmtCant = new Intl.NumberFormat('es-VE', { maximumFractionDigits: 3 });
+  function fmtCantidad(n) { return fmtCant.format(n); }
+
+  function hayCarrito() { return Object.keys(estado.carrito).length > 0; }
+
+  function productoPorId(id) {
+    return estado.catalogo.filter(function (p) { return p.id === Number(id); })[0] || null;
+  }
+
+  function itemsCarrito() {
+    return Object.keys(estado.carrito).map(function (id) {
+      var p = productoPorId(id);
+      return p ? { productoId: p.id, nombre: p.nombre, precioUsd: p.precioUsd, cantidad: estado.carrito[id] } : null;
+    }).filter(Boolean);
+  }
+
+  function totalItemsCent(items) {
+    return items.reduce(function (t, it) { return t + Math.round(cent(it.precioUsd) * it.cantidad); }, 0);
+  }
+
+  function contarUnidades(items) {
+    return items.reduce(function (t, it) { return t + it.cantidad; }, 0);
+  }
+
+  /** "Harina PAN ×2, Queso" (máx. 3 nombres). */
+  function resumenItems(items) {
+    var nombres = items.slice(0, 3).map(function (it) { return it.nombre + (it.cantidad !== 1 ? ' ×' + fmtCantidad(it.cantidad) : ''); });
+    return nombres.join(', ') + (items.length > 3 ? ' y ' + (items.length - 3) + ' más' : '');
+  }
+
+  function textoCarrito(items) {
+    if (!items.length) return 'Sin productos';
+    var u = contarUnidades(items);
+    return fmtCantidad(u) + (u === 1 ? ' producto · ' : ' productos · ') + usd(totalItemsCent(items));
+  }
+
+  /** Con productos, el total de la factura es su suma. */
+  function pintarCarrito() {
+    if (!el.carrito) return;
+    var items = itemsCarrito();
+    el.carrito.hidden = !items.length;
+    poner(el.carritoResumen, items.length ? textoCarrito(items) + ' · ' + resumenItems(items) : '');
+    if (items.length) {
+      var c = totalItemsCent(items);
+      estado.entrada.total = (c % 100 === 0) ? String(c / 100) : (c / 100).toFixed(2);
+    }
+    if (el.totalUsd) el.totalUsd.closest('.campo-caja').toggleAttribute('data-bloqueado', items.length > 0);
+  }
+
+  function cargarCatalogo() {
+    return DB.obtenerCatalogo().then(function (lista) {
+      estado.catalogo = lista;
+      // Productos borrados mientras estaban en la venta en curso: se sacan.
+      Object.keys(estado.carrito).forEach(function (id) { if (!productoPorId(id)) delete estado.carrito[id]; });
+    });
+  }
+
+  function textoStock(p) {
+    if (p.stock == null) return '';
+    if (p.stock <= 0) return 'Agotado';
+    return 'Quedan ' + fmtCantidad(p.stock);
+  }
+
+  function irAInventario() {
+    cerrarProductos();
+    irA('inventario');
+    el.invNombre.focus();
+  }
+
+  function abrirProductos() {
+    if (!el.productos) return;
+    empezarEdicion();
+    return cargarCatalogo().then(function () {
+      el.productosBuscar.value = '';
+      pintarElegir();
+      if (!el.productos.open) el.productos.showModal();
+      el.productosCerrar.focus();
+    }).catch(function (e) {
+      console.error(e);
+      avisar('No se pudo abrir el inventario.');
+    });
+  }
+
+  function pintarElegir() {
+    var q = el.productosBuscar.value.trim().toLowerCase();
+    var lista = estado.catalogo.filter(function (p) { return !q || p.nombre.toLowerCase().indexOf(q) !== -1; });
+    el.productosLista.innerHTML = '';
+    el.productosVacio.hidden = estado.catalogo.length > 0;
+    el.productosBuscar.closest('label').hidden = estado.catalogo.length < 6;
+    lista.forEach(function (p) {
+      var cant = estado.carrito[p.id] || 0;
+      var li = document.createElement('li');
+      li.className = 'producto' + (cant ? ' producto-elegido' : '');
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'producto-boton';
+      b.setAttribute('data-agregar', String(p.id));
+      b.innerHTML = '<span class="producto-nombre"></span><span class="producto-precio"></span><span class="producto-stock"></span>';
+      b.children[0].textContent = p.nombre;
+      b.children[1].textContent = usd(cent(p.precioUsd));
+      b.children[2].textContent = textoStock(p);
+      if (p.stock != null && p.stock - cant <= 0) b.children[2].setAttribute('data-agotado', '');
+      b.setAttribute('aria-label', 'Sumar ' + p.nombre + ', ' + usd(cent(p.precioUsd)) + (cant ? '. Llevas ' + fmtCantidad(cant) : ''));
+      li.appendChild(b);
+      if (cant) {
+        var menos = document.createElement('button');
+        menos.type = 'button';
+        menos.className = 'boton producto-menos';
+        menos.setAttribute('data-restar', String(p.id));
+        menos.setAttribute('aria-label', 'Quitar uno de ' + p.nombre);
+        menos.textContent = '−';
+        var n = document.createElement('span');
+        n.className = 'producto-cantidad';
+        n.textContent = fmtCantidad(cant);
+        li.appendChild(menos);
+        li.appendChild(n);
+      }
+      el.productosLista.appendChild(li);
+    });
+    if (estado.catalogo.length && !lista.length) {
+      var vacio = document.createElement('li');
+      vacio.className = 'venta-vacia';
+      vacio.textContent = 'Ningún producto coincide.';
+      el.productosLista.appendChild(vacio);
+    }
+    poner(el.productosTotal, textoCarrito(itemsCarrito()));
+  }
+
+  function cambiarCantidad(id, delta) {
+    var actual = estado.carrito[id] || 0;
+    var nueva = actual + delta;
+    if (nueva <= 0) delete estado.carrito[id]; else estado.carrito[id] = nueva;
+    pintarElegir();
+  }
+
+  function cerrarProductos() {
+    if (el.productos.open) el.productos.close();
+  }
+
+  /** Al cerrar el selector, el total pasa a la calculadora. */
+  function alCerrarProductos() {
+    var habia = hayCarrito();
+    pintarCarrito();
+    if (habia) activarCampo('recibido');
+    recalcular();
+  }
+
+  function quitarCarrito() {
+    estado.carrito = {};
+    estado.entrada.total = '';
+    pintarCarrito();
+    activarCampo('total');
+    recalcular();
+  }
+
+  // Editor de inventario
+  var productoEditando = null;
+  var confirmandoEliminar = false;
+
+  function mensajeInv(texto) {
+    el.invMensaje.textContent = texto || '';
+    el.invMensaje.hidden = !texto;
+  }
+
+  function nuevoProducto() {
+    productoEditando = null;
+    confirmandoEliminar = false;
+    el.invNombre.value = '';
+    el.invPrecio.value = '';
+    el.invStock.value = '';
+    el.invEliminar.hidden = true;
+    poner(el.invEliminar, 'Eliminar');
+    poner(el.invFormTitulo, 'Nuevo producto');
+    poner(el.invGuardar, 'Guardar producto');
+    mensajeInv('');
+  }
+
+  function editarProducto(id) {
+    var p = productoPorId(id);
+    if (!p) return;
+    productoEditando = p.id;
+    confirmandoEliminar = false;
+    el.invNombre.value = p.nombre;
+    el.invPrecio.value = fmtMonto.format(p.precioUsd);
+    el.invStock.value = p.stock == null ? '' : fmtCantidad(p.stock);
+    el.invEliminar.hidden = false;
+    poner(el.invEliminar, 'Eliminar');
+    poner(el.invFormTitulo, 'Editar producto');
+    poner(el.invGuardar, 'Guardar cambios');
+    mensajeInv('');
+    el.invNombre.focus();
+  }
+
+  function pintarInventario() {
+    el.invLista.innerHTML = '';
+    if (!estado.catalogo.length) {
+      var vacio = document.createElement('li');
+      vacio.className = 'venta-vacia';
+      vacio.textContent = 'Todavía no hay productos.';
+      el.invLista.appendChild(vacio);
+      return;
+    }
+    estado.catalogo.forEach(function (p) {
+      var li = document.createElement('li');
+      li.className = 'producto';
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'producto-boton';
+      b.setAttribute('data-editar-producto', String(p.id));
+      b.innerHTML = '<span class="producto-nombre"></span><span class="producto-precio"></span><span class="producto-stock"></span>';
+      b.children[0].textContent = p.nombre;
+      b.children[1].textContent = usd(cent(p.precioUsd));
+      b.children[2].textContent = p.stock == null ? 'Sin control de stock' : textoStock(p);
+      if (p.stock != null && p.stock <= 0) b.children[2].setAttribute('data-agotado', '');
+      b.setAttribute('aria-label', 'Editar ' + p.nombre);
+      li.appendChild(b);
+      el.invLista.appendChild(li);
+    });
+  }
+
+  function guardarProducto(e) {
+    if (e) e.preventDefault();
+    var precio = parsearTasa(el.invPrecio.value);
+    var stockTexto = el.invStock.value.trim();
+    var stock = stockTexto ? parsearTasa(stockTexto) : null;
+    if (!el.invNombre.value.trim()) { mensajeInv('Escribe el nombre del producto.'); el.invNombre.focus(); return; }
+    if (!isFinite(precio) || precio <= 0) { mensajeInv('Escribe un precio como 1,20.'); el.invPrecio.focus(); return; }
+    if (stockTexto && !isFinite(stock)) { mensajeInv('El stock debe ser un número, o déjalo vacío.'); el.invStock.focus(); return; }
+    el.invGuardar.disabled = true;
+    DB.guardarProducto({ id: productoEditando, nombre: el.invNombre.value, precioUsd: precio, stock: stock }).then(function () {
+      return cargarCatalogo();
+    }).then(function () {
+      pintarInventario();
+      pintarElegir();
+      pintarCarrito();
+      nuevoProducto();
+      mensajeInv('');
+      el.invNombre.focus();
+    }).catch(function (err) {
+      console.error(err);
+      mensajeInv(err && err.message ? err.message : 'No se pudo guardar. Intenta de nuevo.');
+    }).then(function () {
+      el.invGuardar.disabled = false;
+    });
+  }
+
+  /** Dos toques: el primero pide confirmar, el segundo elimina. */
+  function eliminarProducto() {
+    if (productoEditando == null) return;
+    if (!confirmandoEliminar) {
+      confirmandoEliminar = true;
+      poner(el.invEliminar, '¿Seguro? Toca otra vez');
+      return;
+    }
+    DB.eliminarProducto(productoEditando).then(cargarCatalogo).then(function () {
+      pintarInventario();
+      pintarElegir();
+      pintarCarrito();
+      recalcular();
+      nuevoProducto();
+    }).catch(function (err) {
+      console.error(err);
+      mensajeInv('No se pudo eliminar. Intenta de nuevo.');
+    });
+  }
+
+  // ---------- Dashboard ----------
+  var fmtDiaSemana = new Intl.DateTimeFormat('es-VE', { weekday: 'short' });
+  var fmtDiaMes = new Intl.DateTimeFormat('es-VE', { day: '2-digit', month: '2-digit' });
+  var fmtDiaLargo = new Intl.DateTimeFormat('es-VE', { weekday: 'long', day: 'numeric', month: 'short' });
+  var dashBarras = []; // [{ etiqueta, usd, ventas }] del gráfico en pantalla
+
+  function sumarDias(fecha, n) {
+    var d = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate());
+    d.setDate(d.getDate() + n);
+    return d;
+  }
+
+  function pintarDashboard() {
+    var periodo = estado.dashPeriodo;
+    var hoy = new Date();
+    var dias = periodo === 'hoy' ? 1 : Number(periodo);
+    var inicio = sumarDias(hoy, -(dias - 1));
+    Array.prototype.forEach.call(el.dashboardPeriodos.querySelectorAll('[data-periodo]'), function (b) {
+      b.setAttribute('aria-checked', String(b.getAttribute('data-periodo') === periodo));
+    });
+    poner(el.dashboardPeriodo, periodo === 'hoy' ? 'Hoy, ' + diaLegible(DB.diaLocal(hoy)) : diaLegible(DB.diaLocal(inicio)) + ' al ' + diaLegible(DB.diaLocal(hoy)));
+    return DB.ventasEntre(DB.diaLocal(inicio), DB.diaLocal(hoy)).then(function (todas) {
+      var ventas = todas.filter(function (v) { return !v.anuladaEn; });
+      var r = resumirCierre(ventas);
+      pintarKpis(r);
+      pintarGrafico(ventas, periodo, inicio, dias);
+      pintarMetodos(ventas, r);
+      pintarTopProductos(ventas);
+    }).catch(function (e) {
+      console.error(e);
+      poner(el.dashLectura, 'No se pudieron leer las ventas.');
+    });
+  }
+
+  function tile(etiqueta, valor, detalle, tono) {
+    var d = document.createElement('div');
+    d.className = 'dash-kpi';
+    if (tono) d.setAttribute('data-tono', tono);
+    d.innerHTML = '<span class="etiqueta"></span><strong class="dash-kpi-valor"></strong><span class="dash-kpi-detalle"></span>';
+    d.children[0].textContent = etiqueta;
+    d.children[1].textContent = valor;
+    d.children[2].textContent = detalle || '';
+    return d;
+  }
+
+  function pintarKpis(r) {
+    el.dashKpis.innerHTML = '';
+    var promedio = r.cantidad ? Math.round(r.totalUsd / r.cantidad) : 0;
+    el.dashKpis.appendChild(tile('Vendido', usd(r.totalUsd), bs(r.totalBs)));
+    el.dashKpis.appendChild(tile('Ventas', String(r.cantidad), r.cantidad ? 'Ticket promedio ' + usd(promedio) : 'Sin ventas'));
+    el.dashKpis.appendChild(tile('Efectivo neto', usd(r.efectivoUsd), 'Recibido menos vuelto'));
+    el.dashKpis.appendChild(tile('Banco', bs(r.bancoBs), r.puntoBs ? 'Punto ' + bs(r.puntoBs) : 'Pago Móvil'));
+    el.dashKpis.appendChild(r.porVerificar
+      ? tile('Por verificar', String(r.porVerificar), bs(r.porVerificarBs) + ' en Pago Móvil', 'aviso')
+      : tile('Pago Móvil', '✓', 'Todo verificado'));
+  }
+
+  /** Barras de una sola serie (USD vendidos): por hora hoy, por día en 7 y 30 días. */
+  function pintarGrafico(ventas, periodo, inicio, dias) {
+    var barras = [];
+    if (periodo === 'hoy') {
+      var horas = ventas.map(function (v) { return new Date(v.fecha).getHours(); });
+      var desde = Math.min.apply(null, [8].concat(horas));
+      var hasta = Math.max.apply(null, [18].concat(horas));
+      for (var h = desde; h <= hasta; h++) barras.push({ clave: h, etiqueta: h + 'h', largo: h + ':00 a ' + h + ':59', usd: 0, ventas: 0 });
+      ventas.forEach(function (v) {
+        var b = barras[new Date(v.fecha).getHours() - desde];
+        b.usd += desglose(v).totalUsd; b.ventas++;
+      });
+      poner(el.dashGraficoTitulo, 'Ventas por hora (USD)');
+    } else {
+      var indice = {};
+      for (var i = 0; i < dias; i++) {
+        var f = sumarDias(inicio, i);
+        var b = {
+          clave: DB.diaLocal(f), usd: 0, ventas: 0, largo: fmtDiaLargo.format(f),
+          etiqueta: dias <= 7 ? fmtDiaSemana.format(f).replace('.', '') : fmtDiaMes.format(f)
+        };
+        indice[b.clave] = b;
+        barras.push(b);
+      }
+      ventas.forEach(function (v) {
+        var b = indice[v.dia];
+        if (b) { b.usd += desglose(v).totalUsd; b.ventas++; }
+      });
+      poner(el.dashGraficoTitulo, 'Ventas por día (USD)');
+    }
+    dashBarras = barras;
+
+    var W = 340, H = 150, abajo = 20, arriba = 18;
+    var max = Math.max.apply(null, barras.map(function (b) { return b.usd; }).concat([1]));
+    var paso = W / barras.length;
+    var ancho = Math.max(2, paso - 2);
+    var alto = H - abajo - arriba;
+    var cadaEtiqueta = barras.length > 12 ? Math.ceil(barras.length / 6) : (barras.length > 8 ? 2 : 1);
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="dash-svg" role="img" aria-label="' +
+      el.dashGraficoTitulo.textContent + '">';
+    svg += '<line x1="0" x2="' + W + '" y1="' + arriba + '" y2="' + arriba + '" class="dash-guia"/>';
+    svg += '<text x="0" y="' + (arriba - 5) + '" class="dash-eje">' + usd(max === 1 ? 0 : max) + '</text>';
+    svg += '<line x1="0" x2="' + W + '" y1="' + (H - abajo) + '" y2="' + (H - abajo) + '" class="dash-base"/>';
+    barras.forEach(function (b, i) {
+      var x = i * paso + (paso - ancho) / 2;
+      var h = b.usd ? Math.max(3, (b.usd / max) * alto) : 0;
+      var y = H - abajo - h;
+      var rr = Math.min(4, ancho / 2, h);
+      svg += '<g class="dash-barra" data-barra="' + i + '">';
+      svg += '<rect x="' + (i * paso) + '" y="0" width="' + paso + '" height="' + (H - abajo) + '" class="dash-hit"/>';
+      if (h) {
+        svg += '<path class="dash-marca" d="M' + x + ',' + (H - abajo) + 'V' + (y + rr) + 'Q' + x + ',' + y + ' ' + (x + rr) + ',' + y +
+          'H' + (x + ancho - rr) + 'Q' + (x + ancho) + ',' + y + ' ' + (x + ancho) + ',' + (y + rr) + 'V' + (H - abajo) + 'Z"/>';
+      }
+      svg += '</g>';
+      if (i % cadaEtiqueta === 0) {
+        svg += '<text x="' + (i * paso + paso / 2) + '" y="' + (H - 5) + '" text-anchor="middle" class="dash-eje">' + b.etiqueta + '</text>';
+      }
+    });
+    svg += '</svg>';
+    el.dashGrafico.innerHTML = svg;
+    // Tabla accesible con los mismos datos.
+    var tabla = document.createElement('table');
+    tabla.className = 'visualmente-oculto';
+    tabla.innerHTML = '<caption></caption><thead><tr><th>Período</th><th>Ventas</th><th>USD</th></tr></thead><tbody></tbody>';
+    tabla.caption.textContent = el.dashGraficoTitulo.textContent;
+    barras.forEach(function (b) {
+      var tr = tabla.tBodies[0].insertRow();
+      tr.insertCell().textContent = b.largo;
+      tr.insertCell().textContent = String(b.ventas);
+      tr.insertCell().textContent = usd(b.usd);
+    });
+    el.dashGrafico.appendChild(tabla);
+    leerBarra(null);
+  }
+
+  /** Lectura de una barra (toque o paso del mouse); sin barra, el total del período. */
+  function leerBarra(i) {
+    Array.prototype.forEach.call(el.dashGrafico.querySelectorAll('[data-barra]'), function (g) {
+      g.toggleAttribute('data-activa', Number(g.getAttribute('data-barra')) === i);
+    });
+    if (i == null || !dashBarras[i]) {
+      poner(el.dashLectura, 'Toca una barra para ver su detalle.');
+      return;
+    }
+    var b = dashBarras[i];
+    poner(el.dashLectura, b.largo + ': ' + usd(b.usd) + ' · ' + plural(b.ventas, 'venta', 'ventas'));
+  }
+
+  function fila(lista, etiqueta, valor, detalle, fraccion, tono) {
+    var li = document.createElement('li');
+    li.className = 'dash-fila';
+    li.innerHTML = '<span class="dash-fila-nombre"></span><span class="dash-fila-valor"></span>' +
+      '<span class="dash-fila-barra"><span></span></span><span class="dash-fila-detalle"></span>';
+    li.children[0].textContent = etiqueta;
+    li.children[1].textContent = valor;
+    li.children[2].firstChild.style.width = Math.round(Math.max(0, Math.min(1, fraccion)) * 100) + '%';
+    if (tono) li.children[2].setAttribute('data-tono', tono);
+    li.children[3].textContent = detalle;
+    lista.appendChild(li);
+  }
+
+  function pintarMetodos(ventas, r) {
+    var efectivo = 0, movil = 0, punto = 0;
+    ventas.forEach(function (v) {
+      var d = desglose(v);
+      efectivo += d.efectivo - d.vueltoUsd;
+      if (d.canal === 'punto') punto += d.restanteUsd; else movil += d.restanteUsd;
+    });
+    var total = Math.max(1, efectivo + movil + punto);
+    el.dashMetodos.innerHTML = '';
+    if (!r.cantidad) {
+      var vacio = document.createElement('li');
+      vacio.className = 'venta-vacia';
+      vacio.textContent = 'Sin ventas en este período.';
+      el.dashMetodos.appendChild(vacio);
+      return;
+    }
+    [['Efectivo USD', efectivo, null], ['Pago Móvil', movil, 'bs'], ['Punto de venta', punto, 'bs']].forEach(function (m) {
+      if (!m[1] && m[0] === 'Punto de venta') return;
+      fila(el.dashMetodos, m[0], usd(m[1]), Math.round(m[1] / total * 100) + '%', m[1] / total, m[2]);
+    });
+  }
+
+  function pintarTopProductos(ventas) {
+    var por = {};
+    ventas.forEach(function (v) {
+      (v.items || []).forEach(function (it) {
+        var k = it.productoId + '|' + it.nombre;
+        if (!por[k]) por[k] = { nombre: it.nombre, cantidad: 0, usd: 0 };
+        por[k].cantidad += it.cantidad;
+        por[k].usd += Math.round(cent(it.precioUsd) * it.cantidad);
+      });
+    });
+    var top = Object.keys(por).map(function (k) { return por[k]; })
+      .sort(function (a, b) { return b.usd - a.usd; }).slice(0, 5);
+    el.dashProductosBloque.hidden = !top.length;
+    el.dashProductos.innerHTML = '';
+    var max = top.length ? top[0].usd : 1;
+    top.forEach(function (p) {
+      fila(el.dashProductos, p.nombre, usd(p.usd), fmtCantidad(p.cantidad) + (p.cantidad === 1 ? ' unidad' : ' unidades'), p.usd / max);
+    });
+  }
+
   // ---------- Conexión ----------
   function actualizarConexion() {
     var online = navigator.onLine;
@@ -1530,7 +2266,7 @@
     // En iOS Safari, :active solo se pinta al tocar si existe algún oyente de touchstart.
     document.addEventListener('touchstart', function () {}, { passive: true });
     // Tocar fuera del recuadro cierra cualquier modal.
-    [el.tasas, el.ajustes, el.historial, el.anular, el.cobroPm, el.verificar].forEach(function (d) {
+    [el.tasas, el.historial, el.anular, el.cobroPm, el.verificar, el.productos].forEach(function (d) {
       if (d) d.addEventListener('click', function (e) { if (e.target === d) d.close(); });
     });
     if (el.tasas) {
@@ -1539,8 +2275,6 @@
       el.tasasForm.addEventListener('submit', guardarTasas);
     }
     if (el.ajustes) {
-      el.abrirAjustes.addEventListener('click', abrirAjustes);
-      el.ajustesCerrar.addEventListener('click', function () { el.ajustes.close(); });
       el.ajustesForm.addEventListener('submit', guardarAjustes);
       el.ajusteLogo.addEventListener('change', elegirLogo);
       el.ajusteLogoQuitar.addEventListener('click', quitarLogo);
@@ -1573,7 +2307,54 @@
       el.cobroPm.addEventListener('close', function () { ventaPorCobrar = null; });
       el.cobroPmRef.addEventListener('input', evaluarRefCobro);
       el.cobroPmCopiar.addEventListener('click', copiarDatosPM);
-      el.cobroPmIrAjustes.addEventListener('click', function () { el.cobroPm.close(); abrirAjustes(); el.ajustePmBanco.focus(); });
+      el.cobroPmIrAjustes.addEventListener('click', function () { el.cobroPm.close(); irA('ajustes'); el.ajustePmBanco.focus(); });
+    }
+    if (el.productos) {
+      el.abrirProductos.addEventListener('click', abrirProductos);
+      el.carritoEditar.addEventListener('click', abrirProductos);
+      el.carritoQuitar.addEventListener('click', quitarCarrito);
+      el.productosCerrar.addEventListener('click', cerrarProductos);
+      el.productosListo.addEventListener('click', cerrarProductos);
+      el.productos.addEventListener('close', alCerrarProductos);
+      el.productosBuscar.addEventListener('input', pintarElegir);
+      el.productosIrEditar.addEventListener('click', irAInventario);
+      el.productosCrearPrimero.addEventListener('click', irAInventario);
+      el.invForm.addEventListener('submit', guardarProducto);
+      el.invEliminar.addEventListener('click', eliminarProducto);
+      el.productosLista.addEventListener('click', function (e) {
+        var mas = e.target.closest('[data-agregar]');
+        if (mas) { vibrar(); cambiarCantidad(mas.getAttribute('data-agregar'), 1); return; }
+        var menos = e.target.closest('[data-restar]');
+        if (menos) { vibrar(); cambiarCantidad(menos.getAttribute('data-restar'), -1); }
+      });
+      el.invLista.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-editar-producto]');
+        if (b) editarProducto(b.getAttribute('data-editar-producto'));
+      });
+    }
+    if (el.menu) {
+      el.menu.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-vista]');
+        if (b) { vibrar(); irA(b.getAttribute('data-vista')); }
+      });
+    }
+    if (el.vistaRegistro) {
+      el.registroForm.addEventListener('submit', crearCuenta);
+      el.registroLogo.addEventListener('change', elegirLogoRegistro);
+    }
+    if (el.vistaResumen) {
+      el.dashboardPeriodos.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-periodo]');
+        if (b) { estado.dashPeriodo = b.getAttribute('data-periodo'); pintarDashboard(); }
+      });
+      el.dashGrafico.addEventListener('click', function (e) {
+        var g = e.target.closest('[data-barra]');
+        leerBarra(g ? Number(g.getAttribute('data-barra')) : null);
+      });
+      el.dashGrafico.addEventListener('mouseover', function (e) {
+        var g = e.target.closest('[data-barra]');
+        if (g) leerBarra(Number(g.getAttribute('data-barra')));
+      });
     }
     if (el.verificar) {
       el.abrirVerificar.addEventListener('click', function () { abrirVerificar(); });
@@ -1611,6 +2392,7 @@
       var t = e.target;
       if (t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && !t.readOnly))) return; // campos de texto
       if (document.querySelector('dialog[open]')) return; // los modales manejan su propio teclado (Esc los cierra)
+      if (vistaActual !== 'caja') return;
       var k = e.key;
       if (/^[0-9]$/.test(k)) teclear(k);
       else if (k === '.' || k === ',') teclear('.');
@@ -1698,21 +2480,77 @@
       tasaEurInput: $('#tasa-eur-input'),
       tasaParaleloInput: $('#tasa-paralelo-input'),
       tasaGuardar: $('#tasa-guardar'),
-      abrirAjustes: $('#abrir-ajustes'),
-      ajustes: $('#ajustes'),
+      ajustes: $('#vista-ajustes'),
+      ajustePaleta: $('#ajuste-paleta'),
+      temaLogoOpcion: $('#tema-logo-opcion'),
+      temaLogoMuestra: $('#tema-logo-muestra'),
+      vistaCaja: $('#vista-caja'),
+      vistaResumen: $('#vista-resumen'),
+      vistaInventario: $('#vista-inventario'),
+      vistaAjustes: $('#vista-ajustes'),
+      vistaRegistro: $('#vista-registro'),
+      menu: $('#menu'),
+      registroForm: $('#registro-form'),
+      registroLogo: $('#registro-logo'),
+      registroLogoVista: $('#registro-logo-vista'),
+      registroLogoVacio: $('#registro-logo-vacio'),
+      registroPaleta: $('#registro-paleta'),
+      registroNombre: $('#registro-nombre'),
+      registroContacto: $('#registro-contacto'),
+      registroTasa: $('#registro-tasa'),
+      registroPmBanco: $('#registro-pm-banco'),
+      registroPmTelefono: $('#registro-pm-telefono'),
+      registroPmDocumento: $('#registro-pm-documento'),
+      registroMensaje: $('#registro-mensaje'),
+      registroCrear: $('#registro-crear'),
       ajustesForm: $('#ajustes-form'),
-      ajustesCerrar: $('#ajustes-cerrar'),
       ajusteNombre: $('#ajuste-nombre'),
       ajusteContacto: $('#ajuste-contacto'),
       ajusteLogo: $('#ajuste-logo'),
       ajusteLogoVista: $('#ajuste-logo-vista'),
       ajusteLogoVacio: $('#ajuste-logo-vacio'),
       ajusteLogoQuitar: $('#ajuste-logo-quitar'),
-      ajustesTemas: document.querySelectorAll('#ajustes input[name="tema"]'),
+      ajustesTemas: document.querySelectorAll('#vista-ajustes input[name="tema"]'),
       ajustePmBanco: $('#ajuste-pm-banco'),
       ajustePmTelefono: $('#ajuste-pm-telefono'),
       ajustePmDocumento: $('#ajuste-pm-documento'),
       canalBs: $('#canal-bs'),
+      abrirProductos: $('#abrir-productos'),
+      carrito: $('#carrito'),
+      carritoResumen: $('#carrito-resumen'),
+      carritoEditar: $('#carrito-editar'),
+      carritoQuitar: $('#carrito-quitar'),
+      productos: $('#productos'),
+      productosTitulo: $('#productos-titulo'),
+      productosNota: $('#productos-nota'),
+      productosCerrar: $('#productos-cerrar'),
+      productosVistaElegir: $('#productos-vista-elegir'),
+      productosBuscar: $('#productos-buscar'),
+      productosLista: $('#productos-lista'),
+      productosVacio: $('#productos-vacio'),
+      productosCrearPrimero: $('#productos-crear-primero'),
+      productosIrEditar: $('#productos-ir-editar'),
+      productosAcciones: $('#productos-acciones'),
+      productosTotal: $('#productos-total'),
+      productosListo: $('#productos-listo'),
+      invForm: $('#inv-form'),
+      invFormTitulo: $('#inv-form-titulo'),
+      invNombre: $('#inv-nombre'),
+      invPrecio: $('#inv-precio'),
+      invStock: $('#inv-stock'),
+      invMensaje: $('#inv-mensaje'),
+      invEliminar: $('#inv-eliminar'),
+      invGuardar: $('#inv-guardar'),
+      invLista: $('#inv-lista'),
+      dashboardPeriodo: $('#dashboard-periodo'),
+      dashboardPeriodos: $('#dashboard-periodos'),
+      dashKpis: $('#dash-kpis'),
+      dashGraficoTitulo: $('#dash-grafico-titulo'),
+      dashGrafico: $('#dash-grafico'),
+      dashLectura: $('#dash-lectura'),
+      dashMetodos: $('#dash-metodos'),
+      dashProductosBloque: $('#dash-productos-bloque'),
+      dashProductos: $('#dash-productos'),
       cobroPm: $('#cobro-pm'),
       cobroPmForm: $('#cobro-pm-form'),
       cobroPmCerrar: $('#cobro-pm-cerrar'),
@@ -1812,14 +2650,15 @@
       respaldoConfirmar: $('#respaldo-confirmar')
     };
 
-    if (el.ajustePmBanco && PM) {
+    [el.ajustePmBanco, el.registroPmBanco].forEach(function (sel) {
+      if (!sel || !PM) return;
       PM.BANCOS.forEach(function (b) {
         var o = document.createElement('option');
         o.value = b[0];
         o.textContent = b[0] + ' · ' + b[1];
-        el.ajustePmBanco.appendChild(o);
+        sel.appendChild(o);
       });
-    }
+    });
 
     enlazarEventos();
     actualizarConexion();
@@ -1848,8 +2687,11 @@
         estado.tasasRef = { eur: t.eur, paralelo: t.paralelo };
         estado.comercio = a;
         // IndexedDB manda: si la copia de localStorage se perdió o difiere, se corrige aquí.
-        if (a.tema && a.tema !== temaActual()) aplicarTema(a.tema);
+        if (a.tema) aplicarTema(a.tema, a.colores);
         pintarMarca();
+        // Primera vez: registro del comercio. Quien ya tenía nombre (versiones anteriores) entra directo.
+        if (!a.registrado && !a.nombre) irA('registro');
+        else if (vistaActual === 'registro') irA('caja');
         mostrarTasa();
         recalcular();
         return renderVentas();
