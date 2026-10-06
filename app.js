@@ -261,7 +261,7 @@
   }
 
   // ---------- Ajustes del comercio (marca y tema) ----------
-  var COLOR_BARRA = { esmeralda: '#047857', azul: '#1e40af', naranja: '#c2410c', oscuro: '#151f1e', logo: null };
+  var COLOR_BARRA = { esmeralda: '#ffffff', azul: '#ffffff', naranja: '#ffffff', oscuro: '#0a0f14', logo: '#ffffff' };
   var VARIABLES_LOGO = {
     primario: '--primario', primarioOscuro: '--primario-oscuro', primarioSuave: '--primario-suave', fondo: '--fondo',
     bs: '--bs', bsSuave: '--bs-suave', tecla: '--tecla', teclaActiva: '--tecla-activa'
@@ -290,7 +290,7 @@
       else raiz.style.removeProperty(VARIABLES_LOGO[k]);
     });
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', propios ? propios.primario : COLOR_BARRA[tema]);
+    if (meta) meta.setAttribute('content', COLOR_BARRA[tema]);
     try {
       localStorage.setItem('cuadre-tema', tema);
       if (propios) localStorage.setItem('cuadre-colores', JSON.stringify(propios));
@@ -2487,6 +2487,10 @@
       b.setAttribute('data-editar-producto', String(p.id));
       b.innerHTML = '<span class="producto-nombre"></span><span class="producto-precio"></span><span class="producto-stock"></span>';
       b.children[0].textContent = p.nombre;
+      b.children[1].textContent = usd(cent(p.precioUsd));
+      b.children[2].textContent = p.stock == null ? 'Sin control de stock' : textoStock(p);
+      if (p.stock != null && p.stock <= 0) b.children[2].setAttribute('data-agotado', '');
+      // La miniatura va después de llenar los textos: al insertarla primero corre los índices de children.
       if (p.foto) {
         var mini = document.createElement('img');
         mini.className = 'producto-mini';
@@ -2495,9 +2499,6 @@
         b.classList.add('con-foto');
         b.insertBefore(mini, b.firstChild);
       }
-      b.children[1].textContent = usd(cent(p.precioUsd));
-      b.children[2].textContent = p.stock == null ? 'Sin control de stock' : textoStock(p);
-      if (p.stock != null && p.stock <= 0) b.children[2].setAttribute('data-agotado', '');
       b.setAttribute('aria-label', 'Editar ' + p.nombre);
       li.appendChild(b);
       el.invLista.appendChild(li);

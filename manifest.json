@@ -9,14 +9,20 @@
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "theme_color": "#047857",
-  "background_color": "#047857",
+  "theme_color": "#ffffff",
+  "background_color": "#070b10",
   "categories": [
     "business",
     "finance",
     "productivity"
   ],
   "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
     {
       "src": "icons/icon-192.png",
       "sizes": "192x192",

@@ -2,7 +2,7 @@
  * Precachea el "app shell" y lo sirve cache-first para que la app funcione sin conexión.
  * Al cambiar cualquier archivo del shell, sube CACHE_VERSION para forzar la actualización.
  */
-const CACHE_VERSION = 'v11';
+const CACHE_VERSION = 'v12';
 const CACHE_NAME = `cuadre-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -15,6 +15,7 @@ const PRECACHE_URLS = [
   './tasasauto.js',
   './factura.js',
   './manifest.json',
+  './icons/icon.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png'
