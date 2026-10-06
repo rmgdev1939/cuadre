@@ -214,6 +214,7 @@
         <div id="canal-bs" class="canal-bs" role="radiogroup" aria-label="¿Cómo paga los Bs?" hidden>
           <button type="button" class="boton canal" role="radio" data-canal="pago-movil" aria-checked="true">Pago Móvil</button>
           <button type="button" class="boton canal" role="radio" data-canal="punto" aria-checked="false">Punto de venta</button>
+          <button type="button" class="boton canal canal-fiado" role="radio" data-canal="fiado" aria-checked="false">Fiado</button>
         </div>
         <p id="aviso" class="aviso" role="alert"></p>
       </div>
@@ -435,6 +436,43 @@
    </div>
   </section>
 
+  <!-- Fiado: clientes que deben y sus abonos -->
+  <section id="vista-fiado" class="contenedor vista" aria-labelledby="fiado-titulo" hidden>
+   <div class="tarjeta panel">
+    <div class="panel-cabecera">
+      <h2 id="fiado-titulo" class="subtitulo">Fiado</h2>
+      <p class="modal-nota">Lo que te deben tus clientes, en dólares. Para fiar, cobra en la Caja y elige «Fiado».</p>
+    </div>
+    <div class="modal-cuerpo">
+      <div class="fiado-total">
+        <span class="etiqueta">Total por cobrar</span>
+        <strong id="fiado-total" class="cifra cifra-grande">$0,00</strong>
+        <span id="fiado-total-detalle" class="fiado-total-detalle"></span>
+      </div>
+      <label class="campo-texto">
+        <span class="visualmente-oculto">Buscar cliente</span>
+        <input id="fiado-buscar" type="search" autocomplete="off" placeholder="Buscar cliente">
+      </label>
+      <ul id="fiado-lista" class="productos-lista fiado-lista"></ul>
+      <details id="fiado-nuevo" class="registro-pm">
+        <summary>Agregar cliente</summary>
+        <form id="fiado-nuevo-form" class="fiado-nuevo-form" novalidate>
+          <label class="campo-texto">
+            <span class="etiqueta">Nombre</span>
+            <input id="fiado-nuevo-nombre" type="text" maxlength="60" autocomplete="off" placeholder="Ej. Sra. Carmen">
+          </label>
+          <label class="campo-texto">
+            <span class="etiqueta">Teléfono (opcional, para recordarle por WhatsApp)</span>
+            <input id="fiado-nuevo-telefono" type="tel" inputmode="tel" maxlength="20" autocomplete="off" placeholder="Ej. 0414-1234567">
+          </label>
+          <p id="fiado-nuevo-mensaje" class="aviso" role="alert"></p>
+          <button id="fiado-nuevo-guardar" type="submit" class="boton boton-primario">Guardar cliente</button>
+        </form>
+      </details>
+    </div>
+   </div>
+  </section>
+
   <!-- Ajustes del comercio -->
   <section id="vista-ajustes" class="contenedor vista" aria-labelledby="ajustes-titulo" hidden>
    <div class="tarjeta panel">
@@ -541,6 +579,9 @@
     <button type="button" class="menu-boton" data-vista="caja" aria-current="page">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 15h3"/></svg>Caja
     </button>
+    <button type="button" class="menu-boton" data-vista="fiado">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h11a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6z"/><path d="M6 3v18M4 7h4M4 12h4M4 17h4M11 8h5M11 12h5"/></svg>Fiado
+    </button>
     <button type="button" class="menu-boton" data-vista="resumen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/></svg>Resumen
     </button>
@@ -580,6 +621,11 @@
         <span class="etiqueta">Banco · Pago Móvil y Punto</span>
         <output id="cierre-banco" class="cifra">Bs 0,00</output>
         <span id="cierre-banco-detalle" class="cierre-detalle"></span>
+      </div>
+      <div id="cierre-fiado-dato" class="cierre-dato cierre-fiado" hidden>
+        <span class="etiqueta">Fiado · por cobrar</span>
+        <output id="cierre-fiado" class="cifra">$0,00</output>
+        <span id="cierre-fiado-detalle" class="cierre-detalle"></span>
       </div>
       <div class="cierre-dato cierre-total">
         <span class="etiqueta">Total general del día</span>
@@ -631,6 +677,79 @@
     </div>
   </dialog>
 
+
+  <!-- Fiar: elegir el cliente de una venta fiada -->
+  <dialog id="fiar" class="modal" aria-labelledby="fiar-titulo">
+    <form id="fiar-form" method="dialog" novalidate>
+      <div class="modal-cabecera">
+        <div>
+          <h2 id="fiar-titulo" class="subtitulo">¿A quién le fías?</h2>
+          <p class="modal-nota">Elige el cliente o escribe un nombre nuevo.</p>
+        </div>
+        <button id="fiar-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar"><svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="modal-cuerpo">
+        <div class="fiar-monto">
+          <span class="etiqueta">Queda fiado</span>
+          <output id="fiar-monto" class="cifra cifra-grande">—</output>
+          <span id="fiar-equivale" class="cifra-secundaria"></span>
+        </div>
+        <label class="campo-texto">
+          <span class="etiqueta">Cliente</span>
+          <input id="fiar-buscar" type="text" maxlength="60" autocomplete="off" placeholder="Buscar o escribir nombre">
+        </label>
+        <ul id="fiar-lista" class="productos-lista fiado-lista"></ul>
+        <label id="fiar-telefono-campo" class="campo-texto" hidden>
+          <span class="etiqueta">Teléfono del cliente nuevo (opcional)</span>
+          <input id="fiar-telefono" type="tel" inputmode="tel" maxlength="20" autocomplete="off" placeholder="Ej. 0414-1234567">
+        </label>
+        <p id="fiar-mensaje" class="aviso" role="alert"></p>
+      </div>
+      <div class="modal-acciones confirmacion-botones">
+        <button id="fiar-cancelar" type="button" class="boton boton-terciario">Cancelar</button>
+        <button id="fiar-confirmar" type="submit" class="boton boton-primario">Fiar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Cliente del fiado: saldo, movimientos y abonos -->
+  <dialog id="cliente" class="modal" aria-labelledby="cliente-titulo">
+    <form id="cliente-form" method="dialog" novalidate>
+      <div class="modal-cabecera">
+        <div>
+          <h2 id="cliente-titulo" class="subtitulo">Cliente</h2>
+          <p id="cliente-telefono" class="modal-nota"></p>
+        </div>
+        <button id="cliente-cerrar" type="button" class="boton boton-icono" aria-label="Cerrar"><svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="modal-cuerpo">
+        <div class="fiar-monto">
+          <span class="etiqueta">Debe</span>
+          <output id="cliente-saldo" class="cifra cifra-grande">$0,00</output>
+          <span id="cliente-saldo-bs" class="cifra-secundaria"></span>
+        </div>
+        <a id="cliente-whatsapp" class="boton boton-whatsapp" href="#" target="_blank" rel="noopener">Recordarle por WhatsApp</a>
+        <fieldset id="cliente-abono" class="pm-ajuste">
+          <legend class="etiqueta">Registrar abono</legend>
+          <label class="campo-texto">
+            <span class="etiqueta">Monto en USD</span>
+            <input id="cliente-abono-monto" type="text" inputmode="decimal" autocomplete="off" placeholder="Ej. 5,00">
+          </label>
+          <div id="cliente-abono-metodo" class="segmentos" role="radiogroup" aria-label="¿Cómo paga el abono?">
+            <button type="button" class="boton segmento" role="radio" data-abono="efectivo" aria-checked="true">Efectivo $</button>
+            <button type="button" class="boton segmento" role="radio" data-abono="pago-movil" aria-checked="false">Pago Móvil</button>
+            <button type="button" class="boton segmento" role="radio" data-abono="punto" aria-checked="false">Punto</button>
+          </div>
+          <p id="cliente-abono-equivale" class="modal-nota"></p>
+          <button id="cliente-abono-guardar" type="submit" class="boton boton-primario">Registrar abono</button>
+        </fieldset>
+        <p id="cliente-mensaje" class="estado-pago" role="status" hidden></p>
+        <a id="cliente-comprobante" class="boton boton-terciario boton-enlace" href="#" target="_blank" rel="noopener" hidden>Enviar comprobante del abono</a>
+        <span class="etiqueta">Movimientos</span>
+        <ul id="cliente-movimientos" class="ventas-lista cliente-movimientos"></ul>
+      </div>
+    </form>
+  </dialog>
 
   <!-- Historial de cierres -->
   <dialog id="historial" class="modal" aria-labelledby="historial-titulo">

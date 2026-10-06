@@ -17,6 +17,10 @@
  *       canalBs 'pago-movil' y restanteBs > 0 queda "por verificar" hasta tener verificadaEn (ISO).
  *       referencia = lo que escribió el comerciante (p. ej. últimos 6 dígitos); refBanco = la del SMS del banco.
  *       Las ventas anteriores a esto no tienen canalBs y no se piden verificar.
+ *       Fiado (v13): una venta fiada tiene metodo 'fiado', fiadoUsd (lo que quedó debiendo), clienteId y clienteNombre;
+ *       no tiene restante en Bs. Un abono a la deuda es un registro con tipo 'abono' (clienteId, clienteNombre,
+ *       totalUsd = monto abonado) cobrado en efectivo (efectivoUsd) o en Bs (restanteBs + canalBs): entra a la caja
+ *       y al cierre como dinero, pero no cuenta como venta. Saldo del cliente = fiados − abonos, sin anulados.
  *       índice 'dia'
  *   - 'config' { clave, ... }
  *       'tasa'          { clave, valor, fecha }  → tasa BCV USD (la única que usan los cálculos)
@@ -27,6 +31,7 @@
  *       'catalogo'      { clave, sigId, lista: [{ id, nombre, precioUsd, stock (número o null = sin control), activo, foto? }] }
  *                       → inventario. Vender con items descuenta stock en la misma transacción; anular lo devuelve.
  *                         Eliminar un producto solo lo marca activo:false (las ventas viejas conservan su nombre).
+ *       'clientes'      { clave, sigId, lista: [{ id, nombre, telefono, creado (ISO) }] } → clientes del fiado.
  *       'pagos-recibidos' { clave, lista: [{ referencia, montoBs, banco, recibido (ISO), texto, ventaId|null }] }
  *                       → pagos leídos de los SMS del banco; ventaId = venta que verificaron (cada pago verifica una sola).
  *       Las claves nuevas no requieren cambiar la versión de la base.
@@ -278,6 +283,13 @@
     // Pago Móvil / Punto de venta (opcionales).
     if (venta.canalBs === 'pago-movil' || venta.canalBs === 'punto') registro.canalBs = venta.canalBs;
     if (venta.referencia) registro.referencia = String(venta.referencia).replace(/\D/g, '').slice(0, 20);
+    // Fiado y abonos (opcionales).
+    if (venta.tipo === 'abono') registro.tipo = 'abono';
+    if (venta.fiadoUsd != null && Number(venta.fiadoUsd) > 0) registro.fiadoUsd = Number(venta.fiadoUsd);
+    if (venta.clienteId != null) {
+      registro.clienteId = Number(venta.clienteId);
+      registro.clienteNombre = String(venta.clienteNombre || '').slice(0, 60);
+    }
     var items = normalizarItems(venta.items);
     if (!items.length) {
       return conStore(STORE_VENTAS, 'readwrite', function (store) {
@@ -321,6 +333,59 @@
       });
       if (cambio) config.put(cat);
     };
+  }
+
+  // ---------- Clientes del fiado ----------
+  var CLAVE_CLIENTES = 'clientes';
+
+  /** Clientes ordenados por nombre. */
+  function obtenerClientes() {
+    return conStore(STORE_CONFIG, 'readonly', function (store) {
+      return store.get(CLAVE_CLIENTES);
+    }).then(function (r) {
+      return ((r && r.lista) || []).slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); });
+    });
+  }
+
+  /** Crea o edita un cliente { id?, nombre, telefono }. Devuelve el cliente guardado. */
+  function guardarCliente(datos) {
+    var nombre = String(datos && datos.nombre || '').trim().slice(0, 60);
+    var telefono = String(datos && datos.telefono || '').trim().slice(0, 20);
+    if (!nombre) return Promise.reject(new Error('Escribe el nombre del cliente.'));
+    return abrir().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(STORE_CONFIG, 'readwrite');
+        var store = tx.objectStore(STORE_CONFIG);
+        var salida, error;
+        tx.oncomplete = function () { resolve(salida); };
+        tx.onerror = function () { reject(error || tx.error); };
+        tx.onabort = function () { reject(error || tx.error || new Error('Transacción abortada')); };
+        store.get(CLAVE_CLIENTES).onsuccess = function (e) {
+          var r = e.target.result || { clave: CLAVE_CLIENTES, sigId: 1, lista: [] };
+          var c = datos.id != null ? r.lista.filter(function (x) { return x.id === Number(datos.id); })[0] : null;
+          if (datos.id != null && !c) { error = new Error('El cliente ya no existe.'); tx.abort(); return; }
+          var repetido = r.lista.filter(function (x) {
+            return x !== c && x.nombre.toLowerCase() === nombre.toLowerCase();
+          })[0];
+          if (repetido) { error = new Error('Ya tienes un cliente llamado «' + repetido.nombre + '».'); tx.abort(); return; }
+          if (!c) { c = { id: r.sigId++, creado: new Date().toISOString() }; r.lista.push(c); }
+          c.nombre = nombre;
+          c.telefono = telefono;
+          salida = Object.assign({}, c);
+          store.put(r);
+        };
+      });
+    });
+  }
+
+  /** Ventas fiadas y abonos de todos los clientes (abiertos y archivados), ordenados por id. */
+  function movimientosFiado() {
+    return conStore(STORE_VENTAS, 'readonly', function (store) {
+      return store.getAll();
+    }).then(function (lista) {
+      return (lista || []).filter(function (v) { return v.clienteId != null && (v.tipo === 'abono' || v.fiadoUsd > 0); })
+        .sort(function (a, b) { return a.id - b.id; });
+    });
   }
 
   // ---------- Inventario ----------
@@ -738,6 +803,9 @@
     obtenerCatalogo: obtenerCatalogo,
     guardarProducto: guardarProducto,
     anotarCorreo: anotarCorreo,
+    obtenerClientes: obtenerClientes,
+    guardarCliente: guardarCliente,
+    movimientosFiado: movimientosFiado,
     eliminarProducto: eliminarProducto,
     exportarRespaldo: exportarRespaldo,
     validarRespaldo: validarRespaldo,

@@ -34,6 +34,10 @@
   --sobre-bs: #ffffff;
   --whatsapp: #1fa855;
   --sobre-whatsapp: #ffffff;
+  /* Fiado: ámbar, distinto del efectivo (principal) y de los Bs. */
+  --fiado: #b45309;
+  --fiado-suave: #fef3c7;
+  --sobre-fiado: #ffffff;
   --radio: 20px;
   --radio-control: 14px;
   --toque: 56px;
@@ -87,6 +91,9 @@
   --sobre-bs: #04132a;
   --whatsapp: #25d366;
   --sobre-whatsapp: #052e16;
+  --fiado: #fbbf24;
+  --fiado-suave: #2e2208;
+  --sobre-fiado: #241500;
   color-scheme: dark;
 }
 
@@ -1134,8 +1141,8 @@ h1, h2, p { margin: 0; }
   bottom: calc(env(safe-area-inset-bottom) + 8px);
   z-index: 5;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  max-width: 520px;
+  grid-template-columns: repeat(5, 1fr);
+  max-width: 560px;
   margin: 0 auto;
   padding: 4px;
   border: 1px solid var(--linea);
@@ -1277,7 +1284,7 @@ h1, h2, p { margin: 0; }
 .dash-fila-barra[data-tono="bs"] > span { background: linear-gradient(90deg, color-mix(in srgb, var(--bs) 75%, #000), var(--bs)); }
 .dash-fila-detalle { grid-column: 1 / -1; font-size: .8rem; color: var(--texto-suave); font-weight: 600; }
 .panel-cabecera { flex-direction: column; gap: 4px; }
-.menu-boton svg { box-sizing: content-box; width: 48px; height: 22px; padding: 3px 12px; border-radius: 999px; stroke-width: 1.8; transition: background-color .2s ease, box-shadow .2s ease; }
+.menu-boton svg { box-sizing: content-box; width: 40px; height: 22px; padding: 3px 10px; border-radius: 999px; stroke-width: 1.8; transition: background-color .2s ease, box-shadow .2s ease; }
 .menu-boton[aria-current="page"] svg { background: color-mix(in srgb, var(--primario) 14%, transparent); }
 :root[data-tema="oscuro"] .menu-boton[aria-current="page"] svg { box-shadow: 0 0 18px -2px rgba(45, 212, 191, .35); }
 
@@ -1503,3 +1510,38 @@ body:has(#vista-portada:not([hidden])) .boton-acceso { background: #fff; color: 
 .factura-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .factura-botones { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
 .factura-botones .boton { min-height: 48px; }
+
+/* ---------- v13: Fiado ---------- */
+.canal-bs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.canal { padding: 0 6px; font-size: .88rem; line-height: 1.15; }
+.canal-fiado[aria-checked="true"] { border-color: var(--fiado); background: var(--fiado-suave); color: var(--fiado); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fiado) 16%, transparent); }
+.resultado-destacado[data-modo="fiado"] { --tono: var(--fiado); color: var(--sobre-fiado); }
+.insignia[data-metodo="fiado"] { background: var(--fiado-suave); color: var(--fiado); }
+.dash-kpi[data-tono="fiado"] { grid-column: 1 / -1; border-color: color-mix(in srgb, var(--fiado) 30%, transparent); background: var(--fiado-suave); }
+.dash-kpi[data-tono="fiado"] .dash-kpi-valor { color: var(--fiado); }
+.dash-fila-barra[data-tono="fiado"] > span { background: linear-gradient(90deg, color-mix(in srgb, var(--fiado) 75%, #000), var(--fiado)); }
+.cierre-fiado { background: var(--fiado-suave); border-color: color-mix(in srgb, var(--fiado) 25%, transparent); }
+.cierre-fiado .cifra { color: var(--fiado); }
+.cierre-fiado[hidden] { display: none; }
+.fiado-total, .fiar-monto {
+  display: grid;
+  gap: 2px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  background: linear-gradient(140deg, color-mix(in srgb, var(--fiado) 90%, #fff), var(--fiado) 45%, color-mix(in srgb, var(--fiado) 78%, #000));
+  color: var(--sobre-fiado);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 16px 36px -20px var(--fiado);
+}
+.fiado-total .etiqueta, .fiar-monto .etiqueta, .fiar-monto .cifra-secundaria { color: inherit; opacity: .92; }
+.fiado-total-detalle { font-weight: 600; opacity: .92; }
+.fiado-lista { max-height: none; }
+.fiado-al-dia { color: var(--exito); font-weight: 700; }
+.fiado-nuevo-form { display: grid; gap: 10px; }
+.venta-abono .venta-total { color: var(--exito); }
+.cliente-movimientos .venta { grid-template-columns: auto 1fr; }
+.cliente-movimientos .venta-total { grid-column: 2; }
+.cliente-movimientos .venta-detalle { grid-column: 1 / -1; }
+#cliente-abono[hidden], #cliente-whatsapp[hidden], .boton-enlace[hidden], #fiar-telefono-campo[hidden] { display: none; }
+.boton-enlace { display: flex; align-items: center; justify-content: center; text-decoration: none; }
+.estado-pago[data-tipo="ok"] { background: var(--primario-suave); }
+.fiado-lista .producto { grid-template-columns: minmax(0, 1fr); }

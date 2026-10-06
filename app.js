@@ -31,7 +31,9 @@
     comercio: { nombre: '', contacto: '', logo: null, tema: null },
     campoActivo: 'total',    // 'total' | 'recibido' (efectivo USD)
     entrada: { total: '', recibido: '' }, // texto tecleado, p. ej. "12.5"
-    canalBs: 'pago-movil',   // cómo se cobran los Bs: 'pago-movil' | 'punto'
+    canalBs: 'pago-movil',   // cómo se cobra el restante: 'pago-movil' | 'punto' (Bs) | 'fiado' (queda debiendo)
+    clientes: [],            // clientes del fiado (copia de CuadreDB.obtenerClientes)
+    movsFiado: [],           // ventas fiadas y abonos (CuadreDB.movimientosFiado)
     pagos: [],               // pagos recibidos leídos de SMS (copia de CuadreDB.pagosRecibidos)
     catalogo: [],            // productos activos (copia de CuadreDB.obtenerCatalogo)
     carrito: {},             // productoId → cantidad de la venta en curso
@@ -689,15 +691,16 @@
   /** 'efectivo' | 'mixto' | 'pago-movil' | 'punto', según cómo se pagó. */
   function metodoDePago(r) {
     if (r.restanteUsd === 0) return 'efectivo';
+    if (estado.canalBs === 'fiado') return 'fiado';
     if (r.efectivo > 0) return 'mixto';
     return estado.canalBs === 'punto' ? 'punto' : 'pago-movil';
   }
 
-  var NOMBRE_METODO = { efectivo: 'Efectivo USD', mixto: 'Pago mixto', 'pago-movil': 'Pago Móvil', punto: 'Punto de venta' };
+  var NOMBRE_METODO = { efectivo: 'Efectivo USD', mixto: 'Pago mixto', 'pago-movil': 'Pago Móvil', punto: 'Punto de venta', fiado: 'Fiado' };
   var NOMBRE_CANAL = { 'pago-movil': 'Pago Móvil', punto: 'Punto de venta' };
 
   function elegirCanal(canal) {
-    if (!NOMBRE_CANAL[canal]) return;
+    if (!NOMBRE_CANAL[canal] && canal !== 'fiado') return;
     estado.canalBs = canal;
     recalcular();
   }
@@ -721,13 +724,17 @@
       titulo = 'Pago exacto en efectivo';
       principal = usd(0);
       secundario = 'Sin vuelto ni restante';
+    } else if (estado.canalBs === 'fiado') {
+      titulo = r.efectivo > 0 ? 'Queda fiado (USD)' : 'Todo fiado (USD)';
+      principal = usd(r.restanteUsd);
+      secundario = r.tasa ? 'Equivale a ' + bs(r.restanteBs) : '';
     } else {
       titulo = (r.efectivo > 0 ? 'Restante a cobrar en Bs · ' : 'Total a cobrar en Bs · ') + NOMBRE_CANAL[estado.canalBs];
       principal = r.tasa ? bs(r.restanteBs) : '—';
       secundario = 'Equivale a ' + usd(r.restanteUsd);
     }
     if (el.resultado) {
-      el.resultado.setAttribute('data-modo', r.modo);
+      el.resultado.setAttribute('data-modo', r.modo === 'restante' && estado.canalBs === 'fiado' ? 'fiado' : r.modo);
       el.resultado.toggleAttribute('data-vacio', r.total === null || r.total === 0);
     }
     poner(el.resultadoTitulo, titulo);
@@ -776,6 +783,15 @@
     if (estado.tasasRef.paralelo) venta.tasaParalelo = estado.tasasRef.paralelo.valor;
     if (r.restanteBs > 0) venta.canalBs = estado.canalBs;
     if (hayCarrito()) venta.items = itemsCarrito();
+
+    // Fiado: el restante no se cobra; queda como deuda del cliente (en USD).
+    if (venta.metodo === 'fiado') {
+      venta.fiadoUsd = venta.restanteUsd;
+      venta.restanteUsd = 0;
+      venta.restanteBs = 0;
+      delete venta.canalBs;
+      return abrirFiar(venta);
+    }
 
     // Pago Móvil: primero la hoja con el monto exacto, los datos del comercio y la referencia.
     if (venta.canalBs === 'pago-movil') return abrirCobroPM(venta);
@@ -1119,6 +1135,8 @@
       restanteUsd: cent(v.restanteUsd),
       restanteBs: cent(v.restanteBs),
       metodo: v.metodo || 'efectivo',
+      tipo: v.tipo === 'abono' ? 'abono' : 'venta',
+      fiadoUsd: cent(v.fiadoUsd),
       // Las ventas anteriores a Punto de venta no tienen canalBs: sus Bs cuentan como Pago Móvil.
       canal: v.canalBs || (v.metodo === 'punto' ? 'punto' : 'pago-movil'),
       // Solo las ventas nuevas (con canalBs) se piden verificar.
@@ -1142,6 +1160,7 @@
     lineas.push(['Total en Bs', bs(d.totalBs)]);
     if (d.efectivo > 0) lineas.push(['Pagado en USD (efectivo)', usd(d.efectivo)]);
     if (d.restanteBs > 0) lineas.push(['Pagado en Bs (' + NOMBRE_CANAL[d.canal] + ')', bs(d.restanteBs)]);
+    if (d.fiadoUsd > 0) lineas.push(['Fiado a ' + (v.clienteNombre || 'cliente'), usd(d.fiadoUsd)]);
     if (d.restanteBs > 0 && d.canal === 'pago-movil' && (v.refBanco || v.referencia)) lineas.push(['Referencia', v.refBanco || v.referencia]);
     if (d.vueltoUsd > 0) lineas.push(['Vuelto entregado', usd(d.vueltoUsd)]);
     return lineas;
@@ -1338,6 +1357,7 @@
     if (d.efectivo > 0) partes.push('Efectivo ' + usd(d.efectivo));
     if (d.restanteBs > 0) partes.push((d.canal === 'punto' ? 'Punto ' : 'Pago Móvil ') + bs(d.restanteBs));
     if (d.vueltoUsd > 0) partes.push('Vuelto ' + usd(d.vueltoUsd));
+    if (d.fiadoUsd > 0) partes.push('Fiado ' + usd(d.fiadoUsd));
     return partes.join(' · ');
   }
 
@@ -1346,8 +1366,9 @@
     return DB.ventasDelDia().then(function (todas) {
       // Las ventas archivadas por un cierre ya no cuentan en la caja del turno.
       var ventas = todas.filter(function (v) { return v.cierreId == null; });
-      // Las anuladas siguen en la lista (tachadas) pero no suman.
-      var validas = ventas.filter(function (v) { return !v.anuladaEn; });
+      // Las anuladas siguen en la lista (tachadas) pero no suman. Los abonos de fiado tampoco son ventas.
+      var validas = ventas.filter(function (v) { return !v.anuladaEn && v.tipo !== 'abono'; });
+      var abonosCent = 0;
       var totalCent = 0;
       var totalBsCent = 0;
 
@@ -1394,7 +1415,10 @@
             boton.textContent = 'Anular';
             li.children[2].appendChild(boton);
           }
-          li.children[3].textContent = (v.items && v.items.length ? resumenItems(v.items) + ' · ' : '') + detalleVenta(d);
+          li.children[3].textContent = (d.tipo === 'abono' ? 'Abono de ' + (v.clienteNombre || 'cliente') + ' · ' : '') +
+            (v.items && v.items.length ? resumenItems(v.items) + ' · ' : '') + detalleVenta(d) +
+            (d.fiadoUsd > 0 ? ' (' + (v.clienteNombre || 'cliente') + ')' : '');
+          if (d.tipo === 'abono') li.classList.add('venta-abono');
           if (estadoPm) { li.children[3].appendChild(document.createTextNode(' ')); li.children[3].appendChild(estadoPm); }
           el.ventasLista.appendChild(li);
         });
@@ -1411,6 +1435,7 @@
         totalCent += d.totalUsd;
         totalBsCent += d.totalBs; // Bs a la tasa de cada venta
       });
+      ventas.forEach(function (v) { if (!v.anuladaEn && v.tipo === 'abono') abonosCent += cent(v.totalUsd); });
 
       var pendientes = pendientesDe(ventas).length;
       if (el.abrirVerificar) {
@@ -1418,9 +1443,10 @@
         el.abrirVerificar.toggleAttribute('data-pendientes', pendientes > 0);
       }
 
-      var anuladas = ventas.length - validas.length;
+      var anuladas = ventas.filter(function (v) { return v.anuladaEn; }).length;
       poner(el.ventasResumen, plural(validas.length, 'venta', 'ventas') +
         ' · ' + usd(totalCent) + ' · ' + bs(totalBsCent) +
+        (abonosCent ? ' · abonos ' + usd(abonosCent) : '') +
         (anuladas ? ' · ' + plural(anuladas, 'anulada', 'anuladas') : ''));
     }).catch(function (e) {
       console.error(e);
@@ -1511,7 +1537,8 @@
     var hoy = DB ? DB.diaLocal() : '';
     var r = {
       cantidad: 0, anuladas: 0, diasAnteriores: 0,
-      metodos: { efectivo: 0, mixto: 0, 'pago-movil': 0, punto: 0 },
+      metodos: { efectivo: 0, mixto: 0, 'pago-movil': 0, punto: 0, fiado: 0 },
+      fiadoUsd: 0, abonos: 0, abonosUsd: 0,
       recibidoUsd: 0, vueltoUsd: 0, efectivoUsd: 0,
       bancoBs: 0, bancoUsd: 0, pagoMovilBs: 0, puntoBs: 0, porVerificar: 0, porVerificarBs: 0,
       totalUsd: 0, totalBs: 0,
@@ -1521,18 +1548,23 @@
       if (!r.desde || v.dia < r.desde) r.desde = v.dia;
       if (!r.hasta || v.dia > r.hasta) r.hasta = v.dia;
       if (v.anuladaEn) { r.anuladas++; return; }
-      r.cantidad++;
-      if (v.dia < hoy) r.diasAnteriores++;
       var d = desglose(v);
-      r.metodos[d.metodo] = (r.metodos[d.metodo] || 0) + 1;
+      // Abono de fiado: es dinero que entra (efectivo o banco), pero no es una venta.
+      if (d.tipo === 'abono') { r.abonos++; r.abonosUsd += d.totalUsd; }
+      else {
+        r.cantidad++;
+        if (v.dia < hoy) r.diasAnteriores++;
+        r.metodos[d.metodo] = (r.metodos[d.metodo] || 0) + 1;
+        r.fiadoUsd += d.fiadoUsd;
+        r.totalUsd += d.totalUsd;
+        r.totalBs += d.totalBs;
+      }
       r.recibidoUsd += d.efectivo;
       r.vueltoUsd += d.vueltoUsd;
       r.bancoBs += d.restanteBs;
       r.bancoUsd += d.restanteUsd;
       if (d.canal === 'punto') r.puntoBs += d.restanteBs; else r.pagoMovilBs += d.restanteBs;
       if (d.porVerificar) { r.porVerificar++; r.porVerificarBs += d.restanteBs; }
-      r.totalUsd += d.totalUsd;
-      r.totalBs += d.totalBs;
     });
     r.efectivoUsd = r.recibidoUsd - r.vueltoUsd;
     return r;
@@ -1549,6 +1581,7 @@
     if (r.metodos.mixto) partes.push(r.metodos.mixto + ' mixto');
     if (r.metodos['pago-movil']) partes.push(r.metodos['pago-movil'] + ' Pago Móvil');
     if (r.metodos.punto) partes.push(r.metodos.punto + ' punto');
+    if (r.metodos.fiado) partes.push(r.metodos.fiado + ' fiado');
     return partes.join(' · ');
   }
 
@@ -1573,7 +1606,9 @@
       '*Banco / Pago Móvil:* ' + bs(r.bancoBs)
     ], textoCanales(r) ? ['  ' + textoCanales(r)] : [], [
       '  Equivale a ' + usd(r.bancoUsd)
-    ], r.porVerificar ? ['  Sin verificar: ' + r.porVerificar + ' (' + bs(r.porVerificarBs) + ')'] : [], [
+    ], r.porVerificar ? ['  Sin verificar: ' + r.porVerificar + ' (' + bs(r.porVerificarBs) + ')'] : [],
+    r.fiadoUsd || r.abonosUsd ? ['', '*Fiado (por cobrar):* ' + usd(r.fiadoUsd || 0)].concat(
+      r.abonosUsd ? ['  Abonos cobrados: ' + usd(r.abonosUsd) + ' (incluidos en efectivo y banco)'] : []) : [], [
       '',
       '*Total general:* ' + usd(r.totalUsd),
       '  Equivale a ' + bs(r.totalBs)
@@ -1602,10 +1637,16 @@
         ' (' + bs(r.porVerificarBs) + '). Revísalos en tu banco antes de cerrar.'
       : '';
     el.cierreAvisoVerificar.hidden = !r.porVerificar;
+    var hayFiado = !!(r.fiadoUsd || r.abonosUsd);
+    el.cierreFiadoDato.hidden = !hayFiado;
+    poner(el.cierreFiado, usd(r.fiadoUsd || 0));
+    poner(el.cierreFiadoDetalle, r.abonosUsd
+      ? 'Abonos cobrados ' + usd(r.abonosUsd) + ' (' + plural(r.abonos, 'abono', 'abonos') + ', ya sumados en efectivo y banco)'
+      : 'Vendido sin cobrar todavía');
     poner(el.cierreTotal, usd(r.totalUsd));
     poner(el.cierreTotalDetalle, 'Equivale a ' + bs(r.totalBs) + ' a la tasa de cada venta');
 
-    var vacio = r.cantidad === 0 && r.anuladas === 0;
+    var vacio = r.cantidad === 0 && r.anuladas === 0 && !r.abonos;
     el.cierreWhatsapp.href = vacio ? '#' : 'https://wa.me/?text=' + encodeURIComponent(mensajeCierre(r));
     el.cierreWhatsapp.setAttribute('aria-disabled', String(vacio));
     el.cierreWhatsapp.tabIndex = vacio ? -1 : 0;
@@ -1656,6 +1697,7 @@
       recibidoUsd: r.recibidoUsd / 100, vueltoUsd: r.vueltoUsd / 100, efectivoUsd: r.efectivoUsd / 100,
       bancoBs: r.bancoBs / 100, bancoUsd: r.bancoUsd / 100,
       pagoMovilBs: r.pagoMovilBs / 100, puntoBs: r.puntoBs / 100, porVerificar: r.porVerificar, porVerificarBs: r.porVerificarBs / 100,
+      fiadoUsd: r.fiadoUsd / 100, abonos: r.abonos, abonosUsd: r.abonosUsd / 100,
       totalUsd: r.totalUsd / 100, totalBs: r.totalBs / 100
     };
     var ids = cierreActual.ventas.map(function (v) { return v.id; });
@@ -1685,10 +1727,10 @@
   function cierreACentavos(c) {
     var r = {
       cantidad: Number(c.cantidad) || 0, anuladas: Number(c.anuladas) || 0, diasAnteriores: 0,
-      metodos: Object.assign({ efectivo: 0, mixto: 0, 'pago-movil': 0, punto: 0 }, c.metodos || {}),
-      desde: c.desde || null, hasta: c.hasta || null, porVerificar: Number(c.porVerificar) || 0
+      metodos: Object.assign({ efectivo: 0, mixto: 0, 'pago-movil': 0, punto: 0, fiado: 0 }, c.metodos || {}),
+      desde: c.desde || null, hasta: c.hasta || null, porVerificar: Number(c.porVerificar) || 0, abonos: Number(c.abonos) || 0
     };
-    ['recibidoUsd', 'vueltoUsd', 'efectivoUsd', 'bancoBs', 'bancoUsd', 'puntoBs', 'porVerificarBs', 'totalUsd', 'totalBs'].forEach(function (k) {
+    ['recibidoUsd', 'vueltoUsd', 'efectivoUsd', 'bancoBs', 'bancoUsd', 'puntoBs', 'porVerificarBs', 'totalUsd', 'totalBs', 'fiadoUsd', 'abonosUsd'].forEach(function (k) {
       r[k] = cent(c[k]);
     });
     // Cierres anteriores a Punto de venta: todo el banco fue Pago Móvil.
@@ -1762,6 +1804,8 @@
     );
     if (r.puntoBs) lineas.push(['Pago Móvil / Punto', bs(r.pagoMovilBs) + ' / ' + bs(r.puntoBs)]);
     if (r.porVerificar) lineas.push(['Sin verificar', r.porVerificar + ' (' + bs(r.porVerificarBs) + ')']);
+    if (r.fiadoUsd) lineas.push(['Fiado (por cobrar)', usd(r.fiadoUsd)]);
+    if (r.abonosUsd) lineas.push(['Abonos cobrados', usd(r.abonosUsd)]);
     lineas.push(
       ['Total general', usd(r.totalUsd)],
       ['Total en Bs', bs(r.totalBs)]
@@ -1916,12 +1960,309 @@
     mensajeRespaldo('Importación cancelada. Tus datos no cambiaron.');
   }
 
+  // ---------- Fiado ----------
+  var ventaPorFiar = null;
+  var fiarElegido = null; // id del cliente elegido en la hoja de fiar
+  var clienteAbierto = null; // id del cliente en la hoja de detalle
+  var metodoAbono = 'efectivo';
+  var guardandoFiado = false;
+
+  /** Recarga clientes y movimientos. Devuelve { id: saldoCentavos }. */
+  function cargarFiado() {
+    return Promise.all([DB.obtenerClientes(), DB.movimientosFiado()]).then(function (res) {
+      estado.clientes = res[0];
+      estado.movsFiado = res[1];
+      return saldosFiado();
+    });
+  }
+
+  /** Saldo de cada cliente en centavos USD: fiado − abonos, sin anulados. */
+  function saldosFiado() {
+    var saldos = {};
+    estado.movsFiado.forEach(function (v) {
+      if (v.anuladaEn) return;
+      var id = v.clienteId;
+      saldos[id] = (saldos[id] || 0) + (v.tipo === 'abono' ? -cent(v.totalUsd) : cent(v.fiadoUsd));
+    });
+    return saldos;
+  }
+
+  function clientePorId(id) {
+    return estado.clientes.filter(function (c) { return c.id === Number(id); })[0] || null;
+  }
+
+  function ultimoMovimiento(id) {
+    var m = estado.movsFiado.filter(function (v) { return v.clienteId === id && !v.anuladaEn; });
+    return m.length ? m[m.length - 1] : null;
+  }
+
+  function normalizar(t) {
+    return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  }
+
+  /** "0414-1234567" → "584141234567" para wa.me (Venezuela). Vacío si no parece un número. */
+  function telefonoWhatsApp(tel) {
+    var d = String(tel || '').replace(/\D/g, '');
+    if (/^0\d{10}$/.test(d)) return '58' + d.slice(1);
+    if (/^58\d{10}$/.test(d)) return d;
+    return d.length >= 10 ? d : '';
+  }
+
+  function enlaceWhatsAppA(tel, texto) {
+    var n = telefonoWhatsApp(tel);
+    return 'https://wa.me/' + (n || '') + '?text=' + encodeURIComponent(texto);
+  }
+
+  /** Botón de un cliente con su saldo (lista de Fiado y hoja de fiar). */
+  function botonCliente(c, saldo, elegido) {
+    var li = document.createElement('li');
+    li.className = 'producto' + (elegido ? ' producto-elegido' : '');
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'producto-boton';
+    b.setAttribute('data-cliente', String(c.id));
+    if (elegido != null) b.setAttribute('aria-pressed', String(!!elegido));
+    b.innerHTML = '<span class="producto-nombre"></span><span class="producto-precio"></span><span class="producto-stock"></span>';
+    b.children[0].textContent = c.nombre;
+    b.children[1].textContent = saldo > 0 ? usd(saldo) : 'Al día';
+    if (saldo <= 0) b.children[1].classList.add('fiado-al-dia');
+    var ult = ultimoMovimiento(c.id);
+    b.children[2].textContent = ult ? (ult.tipo === 'abono' ? 'Último abono ' : 'Último fiado ') + fmtFechaCorta.format(new Date(ult.fecha)) : 'Sin movimientos';
+    li.appendChild(b);
+    return li;
+  }
+
+  // Vista Fiado
+  function pintarFiado() {
+    return cargarFiado().then(function (saldos) {
+      var total = 0, deben = 0;
+      estado.clientes.forEach(function (c) { if (saldos[c.id] > 0) { total += saldos[c.id]; deben++; } });
+      poner(el.fiadoTotal, usd(total));
+      poner(el.fiadoTotalDetalle, deben
+        ? plural(deben, 'cliente debe', 'clientes deben') + (estado.tasa ? ' · ' + bs(aBsCentavos(total, estado.tasa.valor)) + ' a la tasa de hoy' : '')
+        : 'Nadie te debe. ¡Caja sana!');
+      var q = normalizar(el.fiadoBuscar.value);
+      var lista = estado.clientes.filter(function (c) { return !q || normalizar(c.nombre).indexOf(q) !== -1; })
+        .sort(function (a, b) { return (saldos[b.id] || 0) - (saldos[a.id] || 0) || a.nombre.localeCompare(b.nombre, 'es'); });
+      el.fiadoLista.innerHTML = '';
+      lista.forEach(function (c) { el.fiadoLista.appendChild(botonCliente(c, saldos[c.id] || 0)); });
+      if (!lista.length) {
+        var vacio = document.createElement('li');
+        vacio.className = 'venta-vacia';
+        vacio.textContent = estado.clientes.length ? 'Ningún cliente coincide.' : 'Aún no has fiado. Cobra en la Caja y elige «Fiado».';
+        el.fiadoLista.appendChild(vacio);
+      }
+    }).catch(function (e) {
+      console.error(e);
+      poner(el.fiadoTotalDetalle, 'No se pudo leer el fiado.');
+    });
+  }
+
+  function mensajeNuevoCliente(texto) {
+    el.fiadoNuevoMensaje.textContent = texto || '';
+    el.fiadoNuevoMensaje.hidden = !texto;
+  }
+
+  function guardarNuevoCliente(e) {
+    e.preventDefault();
+    DB.guardarCliente({ nombre: el.fiadoNuevoNombre.value, telefono: el.fiadoNuevoTelefono.value }).then(function () {
+      el.fiadoNuevoNombre.value = '';
+      el.fiadoNuevoTelefono.value = '';
+      mensajeNuevoCliente('');
+      el.fiadoNuevo.open = false;
+      return pintarFiado();
+    }).catch(function (err) { mensajeNuevoCliente(err && err.message ? err.message : 'No se pudo guardar.'); });
+  }
+
+  // Hoja "¿A quién le fías?"
+  function mensajeFiar(texto) {
+    el.fiarMensaje.textContent = texto || '';
+    el.fiarMensaje.hidden = !texto;
+  }
+
+  function abrirFiar(venta) {
+    if (!el.fiar) return;
+    ventaPorFiar = venta;
+    fiarElegido = null;
+    el.fiarBuscar.value = '';
+    el.fiarTelefono.value = '';
+    mensajeFiar('');
+    var monto = cent(venta.fiadoUsd);
+    poner(el.fiarMonto, usd(monto));
+    poner(el.fiarEquivale, 'Equivale a ' + bs(aBsCentavos(monto, venta.tasa)) + (venta.efectivoUsd > 0 ? ' · pagó ' + usd(cent(venta.efectivoUsd)) + ' en efectivo' : ''));
+    cargarFiado().then(pintarFiar).catch(function (e) { console.error(e); pintarFiar({}); });
+    if (!el.fiar.open) el.fiar.showModal();
+    setTimeout(function () { el.fiarBuscar.focus(); }, 60);
+  }
+
+  function pintarFiar(saldos) {
+    saldos = saldos || saldosFiado();
+    var texto = el.fiarBuscar.value.trim();
+    var q = normalizar(texto);
+    var exacto = estado.clientes.filter(function (c) { return normalizar(c.nombre) === q; })[0];
+    var lista = estado.clientes.filter(function (c) { return !q || c.id === fiarElegido || normalizar(c.nombre).indexOf(q) !== -1; })
+      .slice(0, 8);
+    el.fiarLista.innerHTML = '';
+    lista.forEach(function (c) { el.fiarLista.appendChild(botonCliente(c, saldos[c.id] || 0, c.id === fiarElegido)); });
+    var nuevo = !fiarElegido && !!texto && !exacto;
+    el.fiarTelefonoCampo.hidden = !nuevo;
+    var nombre = fiarElegido ? clientePorId(fiarElegido).nombre : (exacto ? exacto.nombre : texto);
+    poner(el.fiarConfirmar, nombre ? 'Fiar a ' + nombre + (nuevo ? ' (nuevo)' : '') : 'Fiar');
+    el.fiarConfirmar.disabled = !nombre || guardandoFiado;
+  }
+
+  function confirmarFiar(e) {
+    e.preventDefault();
+    if (!ventaPorFiar || guardandoFiado) return;
+    var texto = el.fiarBuscar.value.trim();
+    var exacto = estado.clientes.filter(function (c) { return normalizar(c.nombre) === normalizar(texto); })[0];
+    var cliente = fiarElegido ? clientePorId(fiarElegido) : exacto;
+    if (!cliente && !texto) { mensajeFiar('Elige un cliente o escribe su nombre.'); return; }
+    guardandoFiado = true;
+    el.fiarConfirmar.disabled = true;
+    (cliente ? Promise.resolve(cliente) : DB.guardarCliente({ nombre: texto, telefono: el.fiarTelefono.value }))
+      .then(function (c) {
+        var venta = Object.assign(ventaPorFiar, { clienteId: c.id, clienteNombre: c.nombre });
+        ventaPorFiar = null;
+        el.fiar.close();
+        return guardarVenta(venta);
+      })
+      .catch(function (err) { mensajeFiar(err && err.message ? err.message : 'No se pudo fiar. Intenta de nuevo.'); })
+      .then(function () { guardandoFiado = false; if (el.fiar.open) pintarFiar(); });
+  }
+
+  // Hoja del cliente: saldo, abonos y recordatorio
+  function mensajeCliente(texto, tipo) { estadoPago(el.clienteMensaje, texto, tipo); }
+
+  function textoRecordatorio(c, saldo) {
+    var t = encabezadoComercio('Recordatorio de cuenta').concat(['', 'Hola, ' + c.nombre + '.',
+      'Tu saldo pendiente es de *' + usd(saldo) + '*' + (estado.tasa ? ' (' + bs(aBsCentavos(saldo, estado.tasa.valor)) + ' a la tasa BCV de hoy).' : '.')]);
+    var d = datosPagoMovil();
+    if (d) { t.push('', 'Puedes pagar por Pago Móvil:'); d.forEach(function (l) { t.push(l[0] + ': ' + l[1]); }); }
+    t.push('', '¡Gracias!');
+    return t.join('\n');
+  }
+
+  function textoComprobante(c, abono, saldo) {
+    var d = desglose(abono);
+    var t = encabezadoComercio('Comprobante de abono').concat(['',
+      'Cliente: ' + c.nombre,
+      'Fecha: ' + fmtFechaRecibo.format(new Date(abono.fecha)),
+      'Abono: ' + usd(d.totalUsd) + (d.restanteBs > 0 ? ' (' + bs(d.restanteBs) + ' por ' + NOMBRE_CANAL[d.canal] + ')' : ' en efectivo'),
+      'Saldo pendiente: ' + (saldo > 0 ? usd(saldo) : '$0,00 · ¡Cuenta saldada!'), '', '¡Gracias!']);
+    return t.join('\n');
+  }
+
+  function abrirCliente(id) {
+    if (!el.cliente) return;
+    clienteAbierto = Number(id);
+    metodoAbono = 'efectivo';
+    el.clienteAbonoMonto.value = '';
+    mensajeCliente('');
+    el.clienteComprobante.hidden = true;
+    pintarCliente().then(function () {
+      if (!el.cliente.open) el.cliente.showModal();
+    });
+  }
+
+  function pintarCliente() {
+    return cargarFiado().then(function (saldos) {
+      var c = clientePorId(clienteAbierto);
+      if (!c) { if (el.cliente.open) el.cliente.close(); return; }
+      var saldo = saldos[c.id] || 0;
+      poner(el.clienteTitulo, c.nombre);
+      poner(el.clienteTelefono, c.telefono || 'Sin teléfono');
+      poner(el.clienteSaldo, usd(Math.max(0, saldo)));
+      poner(el.clienteSaldoBs, saldo > 0 ? (estado.tasa ? 'Equivale a ' + bs(aBsCentavos(saldo, estado.tasa.valor)) + ' a la tasa de hoy' : '') : 'Cuenta al día');
+      el.clienteWhatsapp.hidden = saldo <= 0;
+      el.clienteWhatsapp.href = enlaceWhatsAppA(c.telefono, textoRecordatorio(c, saldo));
+      el.clienteAbono.hidden = saldo <= 0;
+      if (saldo > 0 && !el.clienteAbonoMonto.value) el.clienteAbonoMonto.placeholder = 'Debe ' + usd(saldo).replace('$', '');
+      pintarMetodoAbono();
+      // Movimientos, del más reciente al más antiguo.
+      el.clienteMovimientos.innerHTML = '';
+      estado.movsFiado.filter(function (v) { return v.clienteId === c.id; }).reverse().forEach(function (v) {
+        var d = desglose(v);
+        var li = document.createElement('li');
+        li.className = 'venta' + (v.anuladaEn ? ' venta-anulada' : '') + (d.tipo === 'abono' ? ' venta-abono' : '');
+        li.innerHTML = '<span class="venta-hora"></span><span class="venta-total"></span><span class="venta-detalle"></span>';
+        li.children[0].textContent = fmtFechaCorta.format(new Date(v.fecha));
+        li.children[1].textContent = d.tipo === 'abono' ? '− ' + usd(d.totalUsd) : '+ ' + usd(d.fiadoUsd);
+        li.children[2].textContent = (d.tipo === 'abono'
+          ? 'Abono' + (d.restanteBs > 0 ? ' por ' + NOMBRE_CANAL[d.canal] + ' (' + bs(d.restanteBs) + ')' : ' en efectivo')
+          : 'Fiado' + (v.items && v.items.length ? ' · ' + resumenItems(v.items) : '') + ' · venta de ' + usd(d.totalUsd)) +
+          (v.anuladaEn ? ' · anulado' : '');
+        el.clienteMovimientos.appendChild(li);
+      });
+      if (!el.clienteMovimientos.children.length) {
+        var vacio = document.createElement('li');
+        vacio.className = 'venta-vacia';
+        vacio.textContent = 'Sin movimientos todavía.';
+        el.clienteMovimientos.appendChild(vacio);
+      }
+    });
+  }
+
+  function pintarMetodoAbono() {
+    Array.prototype.forEach.call(el.clienteAbonoMetodo.querySelectorAll('[data-abono]'), function (b) {
+      b.setAttribute('aria-checked', String(b.getAttribute('data-abono') === metodoAbono));
+    });
+    var monto = Math.round(parsearTasa(el.clienteAbonoMonto.value) * 100);
+    poner(el.clienteAbonoEquivale, metodoAbono !== 'efectivo' && monto > 0 && estado.tasa
+      ? 'El cliente paga ' + bs(aBsCentavos(monto, estado.tasa.valor)) + ' a la tasa BCV de hoy.' : '');
+  }
+
+  function registrarAbono(e) {
+    e.preventDefault();
+    if (guardandoFiado) return;
+    var c = clientePorId(clienteAbierto);
+    if (!c) return;
+    var saldo = saldosFiado()[c.id] || 0;
+    var monto = Math.round(parsearTasa(el.clienteAbonoMonto.value) * 100);
+    if (!(monto > 0)) { mensajeCliente('Escribe el monto del abono en dólares.', 'error'); return; }
+    if (monto > saldo) { mensajeCliente('El abono es mayor que lo que debe (' + usd(saldo) + ').', 'error'); return; }
+    if (!estado.tasa) { mensajeCliente('Falta la tasa BCV del día.', 'error'); return; }
+    var tasa = estado.tasa.valor;
+    var enBs = metodoAbono !== 'efectivo';
+    var abono = {
+      tipo: 'abono', clienteId: c.id, clienteNombre: c.nombre,
+      fecha: new Date().toISOString(), tasa: tasa,
+      totalUsd: monto / 100, totalBs: aBsCentavos(monto, tasa) / 100,
+      efectivoUsd: enBs ? 0 : monto / 100, recibidoUsd: enBs ? 0 : monto / 100,
+      vueltoUsd: 0, vueltoBs: 0,
+      restanteUsd: enBs ? monto / 100 : 0, restanteBs: enBs ? aBsCentavos(monto, tasa) / 100 : 0,
+      metodo: enBs ? metodoAbono : 'efectivo'
+    };
+    if (enBs) abono.canalBs = metodoAbono;
+    guardandoFiado = true;
+    el.clienteAbonoGuardar.disabled = true;
+    DB.registrarVenta(abono).then(function (id) {
+      abono.id = id;
+      el.clienteAbonoMonto.value = '';
+      return pintarCliente();
+    }).then(function () {
+      var resto = saldosFiado()[c.id] || 0;
+      mensajeCliente('Abono de ' + usd(monto) + ' registrado. ' + (resto > 0 ? 'Queda debiendo ' + usd(resto) + '.' : '¡Cuenta saldada!') +
+        (abono.canalBs === 'pago-movil' ? ' Verifica el Pago Móvil en tu banco.' : ''), 'ok');
+      el.clienteComprobante.href = enlaceWhatsAppA(c.telefono, textoComprobante(c, abono, resto));
+      el.clienteComprobante.hidden = false;
+      renderVentas();
+      if (vistaActual === 'fiado') pintarFiado();
+    }).catch(function (err) {
+      console.error(err);
+      mensajeCliente('No se pudo registrar el abono. Intenta de nuevo.', 'error');
+    }).then(function () {
+      guardandoFiado = false;
+      el.clienteAbonoGuardar.disabled = false;
+    });
+  }
+
   // ---------- Vistas (menú inferior) ----------
   var vistaActual = 'caja';
 
   function irA(vista) {
     var secciones = {
-      caja: el.vistaCaja, resumen: el.vistaResumen, inventario: el.vistaInventario, ajustes: el.vistaAjustes,
+      caja: el.vistaCaja, fiado: el.vistaFiado, resumen: el.vistaResumen, inventario: el.vistaInventario, ajustes: el.vistaAjustes,
       registro: el.vistaRegistro, portada: el.vistaPortada, ingresar: el.vistaIngresar
     };
     var afuera = vista === 'registro' || vista === 'portada' || vista === 'ingresar';
@@ -1939,6 +2280,7 @@
     document.body.setAttribute('data-vista', vista);
     window.scrollTo(0, 0);
     if (vista === 'resumen') pintarDashboard();
+    if (vista === 'fiado') pintarFiado();
     if (vista === 'ajustes') abrirAjustes();
     if (vista === 'inventario') cargarCatalogo().then(function () { pintarInventario(); nuevoProducto(); });
     if (vista === 'caja') refrescarCatalogo();
@@ -2573,8 +2915,10 @@
     });
     poner(el.dashboardPeriodo, periodo === 'hoy' ? 'Hoy, ' + diaLegible(DB.diaLocal(hoy)) : diaLegible(DB.diaLocal(inicio)) + ' al ' + diaLegible(DB.diaLocal(hoy)));
     return DB.ventasEntre(DB.diaLocal(inicio), DB.diaLocal(hoy)).then(function (todas) {
-      var ventas = todas.filter(function (v) { return !v.anuladaEn; });
-      var r = resumirCierre(ventas);
+      var validas = todas.filter(function (v) { return !v.anuladaEn; });
+      var r = resumirCierre(validas);
+      // El gráfico y "Cómo te pagaron" son de ventas: los abonos de fiado no cuentan.
+      var ventas = validas.filter(function (v) { return v.tipo !== 'abono'; });
       pintarKpis(r);
       pintarGrafico(ventas, periodo, inicio, dias);
       pintarMetodos(ventas, r);
@@ -2606,6 +2950,9 @@
     el.dashKpis.appendChild(r.porVerificar
       ? tile('Por verificar', String(r.porVerificar), bs(r.porVerificarBs) + ' en Pago Móvil', 'aviso')
       : tile('Pago Móvil', '✓', 'Todo verificado'));
+    if (r.fiadoUsd || r.abonosUsd) {
+      el.dashKpis.appendChild(tile('Fiado', usd(r.fiadoUsd), r.abonosUsd ? 'Abonos cobrados ' + usd(r.abonosUsd) : 'Sin abonos en el período', 'fiado'));
+    }
   }
 
   /** Barras de una sola serie (USD vendidos): por hora hoy, por día en 7 y 30 días. */
@@ -2711,13 +3058,14 @@
   }
 
   function pintarMetodos(ventas, r) {
-    var efectivo = 0, movil = 0, punto = 0;
+    var efectivo = 0, movil = 0, punto = 0, fiado = 0;
     ventas.forEach(function (v) {
       var d = desglose(v);
       efectivo += d.efectivo - d.vueltoUsd;
       if (d.canal === 'punto') punto += d.restanteUsd; else movil += d.restanteUsd;
+      fiado += d.fiadoUsd;
     });
-    var total = Math.max(1, efectivo + movil + punto);
+    var total = Math.max(1, efectivo + movil + punto + fiado);
     el.dashMetodos.innerHTML = '';
     if (!r.cantidad) {
       var vacio = document.createElement('li');
@@ -2726,8 +3074,8 @@
       el.dashMetodos.appendChild(vacio);
       return;
     }
-    [['Efectivo USD', efectivo, null], ['Pago Móvil', movil, 'bs'], ['Punto de venta', punto, 'bs']].forEach(function (m) {
-      if (!m[1] && m[0] === 'Punto de venta') return;
+    [['Efectivo USD', efectivo, null], ['Pago Móvil', movil, 'bs'], ['Punto de venta', punto, 'bs'], ['Fiado', fiado, 'fiado']].forEach(function (m) {
+      if (!m[1] && (m[0] === 'Punto de venta' || m[0] === 'Fiado')) return;
       fila(el.dashMetodos, m[0], usd(m[1]), Math.round(m[1] / total * 100) + '%', m[1] / total, m[2]);
     });
   }
@@ -2773,7 +3121,7 @@
     // En iOS Safari, :active solo se pinta al tocar si existe algún oyente de touchstart.
     document.addEventListener('touchstart', function () {}, { passive: true });
     // Tocar fuera del recuadro cierra cualquier modal.
-    [el.tasas, el.historial, el.anular, el.cobroPm, el.verificar, el.productos].forEach(function (d) {
+    [el.tasas, el.historial, el.anular, el.cobroPm, el.verificar, el.productos, el.fiar, el.cliente].forEach(function (d) {
       if (d) d.addEventListener('click', function (e) { if (e.target === d) d.close(); });
     });
     if (el.tasas) {
@@ -2815,6 +3163,39 @@
       el.cobroPmRef.addEventListener('input', evaluarRefCobro);
       el.cobroPmCopiar.addEventListener('click', copiarDatosPM);
       el.cobroPmIrAjustes.addEventListener('click', function () { el.cobroPm.close(); irA('ajustes'); el.ajustePmBanco.focus(); });
+    }
+    if (el.fiar) {
+      el.fiarForm.addEventListener('submit', confirmarFiar);
+      el.fiarCerrar.addEventListener('click', function () { el.fiar.close(); });
+      el.fiarCancelar.addEventListener('click', function () { el.fiar.close(); });
+      el.fiarBuscar.addEventListener('input', function () { fiarElegido = null; mensajeFiar(''); pintarFiar(); });
+      el.fiarLista.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-cliente]');
+        if (!b) return;
+        var id = Number(b.getAttribute('data-cliente'));
+        fiarElegido = fiarElegido === id ? null : id;
+        el.fiarBuscar.value = fiarElegido ? clientePorId(id).nombre : '';
+        pintarFiar();
+      });
+      // Cerrar sin fiar deja la venta en la calculadora, sin registrar.
+      el.fiar.addEventListener('close', function () { ventaPorFiar = null; });
+    }
+    if (el.vistaFiado) {
+      el.fiadoBuscar.addEventListener('input', pintarFiado);
+      el.fiadoLista.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-cliente]');
+        if (b) abrirCliente(b.getAttribute('data-cliente'));
+      });
+      el.fiadoNuevoForm.addEventListener('submit', guardarNuevoCliente);
+    }
+    if (el.cliente) {
+      el.clienteForm.addEventListener('submit', registrarAbono);
+      el.clienteCerrar.addEventListener('click', function () { el.cliente.close(); });
+      el.clienteAbonoMonto.addEventListener('input', pintarMetodoAbono);
+      el.clienteAbonoMetodo.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-abono]');
+        if (b) { metodoAbono = b.getAttribute('data-abono'); pintarMetodoAbono(); }
+      });
     }
     if (el.productos) {
       el.abrirProductos.addEventListener('click', abrirProductos);
@@ -3020,6 +3401,47 @@
       vistaAjustes: $('#vista-ajustes'),
       vistaRegistro: $('#vista-registro'),
       menu: $('#menu'),
+      vistaFiado: $('#vista-fiado'),
+      fiadoTotal: $('#fiado-total'),
+      fiadoTotalDetalle: $('#fiado-total-detalle'),
+      fiadoBuscar: $('#fiado-buscar'),
+      fiadoLista: $('#fiado-lista'),
+      fiadoNuevo: $('#fiado-nuevo'),
+      fiadoNuevoForm: $('#fiado-nuevo-form'),
+      fiadoNuevoNombre: $('#fiado-nuevo-nombre'),
+      fiadoNuevoTelefono: $('#fiado-nuevo-telefono'),
+      fiadoNuevoMensaje: $('#fiado-nuevo-mensaje'),
+      fiar: $('#fiar'),
+      fiarForm: $('#fiar-form'),
+      fiarCerrar: $('#fiar-cerrar'),
+      fiarCancelar: $('#fiar-cancelar'),
+      fiarMonto: $('#fiar-monto'),
+      fiarEquivale: $('#fiar-equivale'),
+      fiarBuscar: $('#fiar-buscar'),
+      fiarLista: $('#fiar-lista'),
+      fiarTelefonoCampo: $('#fiar-telefono-campo'),
+      fiarTelefono: $('#fiar-telefono'),
+      fiarMensaje: $('#fiar-mensaje'),
+      fiarConfirmar: $('#fiar-confirmar'),
+      cliente: $('#cliente'),
+      clienteForm: $('#cliente-form'),
+      clienteTitulo: $('#cliente-titulo'),
+      clienteTelefono: $('#cliente-telefono'),
+      clienteCerrar: $('#cliente-cerrar'),
+      clienteSaldo: $('#cliente-saldo'),
+      clienteSaldoBs: $('#cliente-saldo-bs'),
+      clienteWhatsapp: $('#cliente-whatsapp'),
+      clienteAbono: $('#cliente-abono'),
+      clienteAbonoMonto: $('#cliente-abono-monto'),
+      clienteAbonoMetodo: $('#cliente-abono-metodo'),
+      clienteAbonoEquivale: $('#cliente-abono-equivale'),
+      clienteAbonoGuardar: $('#cliente-abono-guardar'),
+      clienteMensaje: $('#cliente-mensaje'),
+      clienteComprobante: $('#cliente-comprobante'),
+      clienteMovimientos: $('#cliente-movimientos'),
+      cierreFiadoDato: $('#cierre-fiado-dato'),
+      cierreFiado: $('#cierre-fiado'),
+      cierreFiadoDetalle: $('#cierre-fiado-detalle'),
       registroForm: $('#registro-form'),
       registroLogo: $('#registro-logo'),
       registroLogoVista: $('#registro-logo-vista'),
