@@ -14,9 +14,13 @@
 (function () {
   'use strict';
 
-  // Nube de Cuadre (Supabase). Vacío hasta crear el proyecto; mientras tanto se puede
-  // apuntar a una nube de prueba con localStorage 'cuadre-nube' = '{"url":"…","clave":"…"}'.
-  var NUBE = { url: '', clave: '' };
+  // Nube de Cuadre (Supabase, proyecto "cuadre"). La clave es la pública (anon): solo deja llamar
+  // a escucha_publicar / escucha_leer. Para pruebas se puede apuntar a otra nube con
+  // localStorage 'cuadre-nube' = '{"url":"…","clave":"…"}'.
+  var NUBE = {
+    url: 'https://rpohwmtixiajqinbnyvf.supabase.co',
+    clave: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJwb2h3bXRpeGlhanFpbmJueXZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE5MTIwNzcsImV4cCI6MjEwNzQ4ODA3N30.fb3TFzqpwnSjcX7azKQxsG44oQLdlbmvVZB1G-l28Bw'
+  };
 
   var CLAVE = 'cuadre-escucha';
   var PREFIJO = 'CUADRE1.';

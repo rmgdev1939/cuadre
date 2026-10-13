@@ -5,7 +5,7 @@
 -- Seguridad: el canal es un secreto aleatorio de 128 bits que solo conocen los teléfonos
 -- del comercio. En la base se guarda su hash (SHA-256), nunca el canal. Nadie lee ni
 -- escribe la tabla directamente: solo las dos funciones de abajo, con la clave pública.
--- Los avisos se borran solos a los 3 días.
+-- Borrado a los 3 días y revocaciones extra: ver escucha-limpieza.sql (pendiente de aplicar).
 
 create extension if not exists pgcrypto with schema extensions;
 
@@ -20,7 +20,6 @@ create table if not exists public.escucha_avisos (
 create index if not exists escucha_avisos_canal_id on public.escucha_avisos (canal_hash, id);
 
 alter table public.escucha_avisos enable row level security;
-revoke all on public.escucha_avisos from anon, authenticated;
 
 create or replace function public.escucha_hash(p_canal text)
 returns text language sql immutable
@@ -49,7 +48,6 @@ begin
   values (public.escucha_hash(p_canal), left(p_texto, 600), left(coalesce(p_origen, ''), 120),
           least(coalesce(p_recibido, now()), now()))
   returning id into nuevo;
-  delete from public.escucha_avisos where creado < now() - interval '3 days';
   return nuevo;
 end $$;
 
@@ -66,7 +64,5 @@ as $$
   limit 50
 $$;
 
-revoke all on function public.escucha_publicar(text, text, text, timestamptz) from public;
-revoke all on function public.escucha_leer(text, bigint) from public;
 grant execute on function public.escucha_publicar(text, text, text, timestamptz) to anon, authenticated;
 grant execute on function public.escucha_leer(text, bigint) to anon, authenticated;
