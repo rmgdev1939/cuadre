@@ -1545,3 +1545,36 @@ body:has(#vista-portada:not([hidden])) .boton-acceso { background: #fff; color: 
 .boton-enlace { display: flex; align-items: center; justify-content: center; text-decoration: none; }
 .estado-pago[data-tipo="ok"] { background: var(--primario-suave); }
 .fiado-lista .producto { grid-template-columns: minmax(0, 1fr); }
+
+/* ---------- Verificación automática (Cuadre Escucha) ---------- */
+.escucha { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--borde); }
+.escucha-bloque { display: grid; gap: 8px; }
+.escucha-bloque[hidden] { display: none; }
+.escucha-estado { margin: 0; font-weight: 700; color: var(--texto-suave); }
+.escucha-estado[data-tipo="ok"] { color: var(--primario-oscuro); }
+.escucha-estado[data-tipo="error"] { color: var(--peligro); }
+:root[data-tema="oscuro"] .escucha-estado[data-tipo="ok"] { color: var(--primario); }
+.escucha-codigo {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--texto) 5%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem;
+  word-break: break-all;
+  user-select: all;
+}
+/* Pago que llegó solo mientras el cobro estaba abierto. */
+.estado-pago[data-tipo="ok"][data-auto] { font-size: 1.05rem; padding: 14px; }
+.estado-pago[data-tipo="espera"]::before {
+  content: '';
+  display: inline-block;
+  width: .6em; height: .6em;
+  margin-right: .5em;
+  border-radius: 50%;
+  background: var(--primario);
+  vertical-align: middle;
+  animation: escucha-pulso 1.2s ease-in-out infinite;
+}
+@keyframes escucha-pulso { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .estado-pago[data-tipo="espera"]::before { animation: none; } }

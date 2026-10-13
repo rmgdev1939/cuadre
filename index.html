@@ -528,6 +528,29 @@
           </label>
         </fieldset>
 
+        <section id="escucha" class="escucha" aria-labelledby="escucha-titulo">
+          <span id="escucha-titulo" class="etiqueta">Verificación automática · prueba</span>
+          <p class="modal-nota">El teléfono donde te llegan los avisos de tu banco, con la app Cuadre Escucha, le avisa a esta caja cuando entra un Pago Móvil. La venta se verifica sola, sin que el cajero entre al banco.</p>
+          <p id="escucha-estado" class="escucha-estado" role="status"></p>
+          <div id="escucha-inactivo" class="escucha-bloque">
+            <button id="escucha-activar" type="button" class="boton boton-secundario">Activar en esta caja</button>
+            <label class="campo-texto">
+              <span class="etiqueta">¿Ya tienes un código de otra caja? Pégalo aquí</span>
+              <input id="escucha-codigo" type="text" autocomplete="off" spellcheck="false" placeholder="CUADRE1.…">
+            </label>
+            <button id="escucha-unir" type="button" class="boton boton-terciario">Unir esta caja</button>
+          </div>
+          <div id="escucha-activo" class="escucha-bloque" hidden>
+            <p class="modal-nota">Envía este código al teléfono del banco y pégalo en Cuadre Escucha. Sirve también para unir otra caja.</p>
+            <output id="escucha-codigo-ver" class="escucha-codigo"></output>
+            <div class="respaldo-botones">
+              <button id="escucha-copiar" type="button" class="boton boton-terciario">Copiar código</button>
+              <a id="escucha-whatsapp" class="boton boton-whatsapp" href="#" target="_blank" rel="noopener">Enviar por WhatsApp</a>
+            </div>
+            <button id="escucha-desactivar" type="button" class="boton boton-terciario boton-peligro">Desactivar en esta caja</button>
+          </div>
+        </section>
+
         <fieldset class="temas">
           <legend class="etiqueta">Paleta de colores</legend>
           <label id="tema-logo-opcion" class="tema-opcion tema-opcion-logo" hidden><input type="radio" name="tema" value="logo"><span id="tema-logo-muestra" class="tema-muestra" data-muestra="logo"></span>Colores de mi logo</label>
@@ -888,6 +911,7 @@
 
   <script src="db.js" defer></script>
   <script src="pagomovil.js" defer></script>
+  <script src="escucha.js" defer></script>
   <script src="tasasauto.js" defer></script>
   <script src="factura.js" defer></script>
   <script src="app.js" defer></script>

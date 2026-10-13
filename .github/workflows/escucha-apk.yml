@@ -1,0 +1,30 @@
+# Compila la app de Android "Cuadre Escucha" (APK de prueba, firmado con clave de depuración).
+name: Cuadre Escucha (APK)
+
+on:
+  push:
+    paths:
+      - 'escucha-android/**'
+      - '.github/workflows/escucha-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Compilar
+        working-directory: escucha-android
+        run: gradle --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cuadre-escucha-apk
+          path: escucha-android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30

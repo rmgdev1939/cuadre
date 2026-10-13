@@ -22,6 +22,7 @@
 
   var DB = window.CuadreDB;
   var PM = window.CuadrePM;
+  var ESC = window.CuadreEscucha; // verificación automática (opcional)
   var MAX_DIGITOS_ENTEROS = 7;
 
   // ---------- Estado ----------
@@ -496,6 +497,7 @@
     respaldoPendiente = null;
     mostrarConfirmacionRespaldo('');
     mensajeRespaldo('');
+    pintarEscucha();
   }
 
   function elegirLogo() {
@@ -827,6 +829,7 @@
   // ---------- Cobro por Pago Móvil ----------
   var ventaPorCobrar = null;
   var pagoEncontrado = null; // pago recibido (SMS) que coincide con la referencia escrita
+  var cobroAbiertoEn = 0;     // para reconocer el Pago Móvil que llega solo mientras se cobra
 
   function datosPagoMovil() {
     var c = estado.comercio;
@@ -878,7 +881,9 @@
     el.cobroPmRegistrar.disabled = false;
     if (!el.cobroPm.open) el.cobroPm.showModal();
     el.cobroPmCerrar.focus();
+    cobroAbiertoEn = Date.now();
     cargarPagos().then(evaluarRefCobro);
+    sondearPronto();
   }
 
   function cargarPagos() {
@@ -888,11 +893,24 @@
     });
   }
 
-  /** Mensaje de estado del pago: tipo 'ok' | 'aviso' | 'error' | 'info'. */
-  function estadoPago(nodo, texto, tipo) {
+  /** Mensaje de estado del pago: tipo 'ok' | 'aviso' | 'error' | 'info' | 'espera'. `auto`: llegó solo. */
+  function estadoPago(nodo, texto, tipo, auto) {
     nodo.textContent = texto || '';
     nodo.hidden = !texto;
     nodo.setAttribute('data-tipo', tipo || 'info');
+    if (auto) nodo.setAttribute('data-auto', ''); else nodo.removeAttribute('data-auto');
+  }
+
+  /**
+   * Pago Móvil que llegó (aviso del banco) por el monto exacto desde poco antes de abrir el cobro
+   * y que no verificó ninguna venta. Solo si hay uno: con dos iguales hay que pedir la referencia.
+   */
+  function pagoAutomatico(monto) {
+    var desde = cobroAbiertoEn - 10 * 60 * 1000;
+    var libres = (estado.pagos || []).filter(function (p) {
+      return p.ventaId == null && cent(p.montoBs) === monto && Date.parse(p.recibido) >= desde;
+    });
+    return libres.length === 1 ? libres[0] : null;
   }
 
   /** Busca entre los SMS ya recibidos el pago que corresponde a la referencia escrita. */
@@ -901,7 +919,18 @@
     pagoEncontrado = null;
     var ref = PM.limpiarRef(el.cobroPmRef.value);
     var monto = cent(ventaPorCobrar.restanteBs);
-    if (!ref) return estadoPago(el.cobroPmEstado, 'Sin referencia, la venta quedará por verificar.');
+    if (!ref) {
+      var auto = pagoAutomatico(monto);
+      if (auto) {
+        pagoEncontrado = auto;
+        return estadoPago(el.cobroPmEstado, '✓ Llegó el Pago Móvil: ' + bs(monto) + ' · Ref. ' + auto.referencia +
+          (auto.banco ? ' · ' + auto.banco : '') + '. Lo confirmó tu banco.', 'ok', true);
+      }
+      if (ESC && ESC.activo()) {
+        return estadoPago(el.cobroPmEstado, 'Esperando el pago… Se confirma solo cuando llegue el aviso de tu banco.', 'espera');
+      }
+      return estadoPago(el.cobroPmEstado, 'Sin referencia, la venta quedará por verificar.');
+    }
     if (ref.length < 4) return estadoPago(el.cobroPmEstado, 'Escribe al menos 4 dígitos de la referencia.');
     var coinciden = (estado.pagos || []).filter(function (p) { return PM.coincideRef(ref, p.referencia); });
     var libres = coinciden.filter(function (p) { return p.ventaId == null; });
@@ -917,6 +946,9 @@
     }
     if (coinciden.length) {
       return estadoPago(el.cobroPmEstado, '⚠ Esa referencia ya verificó otra venta. Puede ser una captura repetida: revisa tu banco.', 'error');
+    }
+    if (ESC && ESC.activo()) {
+      return estadoPago(el.cobroPmEstado, 'Esperando el aviso de tu banco con esa referencia… Se confirma solo al llegar.', 'espera');
     }
     estadoPago(el.cobroPmEstado, 'Aún no tengo el SMS de este pago. La venta quedará por verificar y se verifica sola al compartir el SMS.', 'aviso');
   }
@@ -943,6 +975,158 @@
       navigator.clipboard.writeText(texto).then(hecho, function () { poner(el.cobroPmCopiar, 'No se pudo copiar'); });
     } else {
       poner(el.cobroPmCopiar, 'No se pudo copiar');
+    }
+  }
+
+  // ---------- Verificación automática (Cuadre Escucha) ----------
+  // El teléfono del banco publica cada aviso en la nube; aquí se leen, se guardan como pagos
+  // recibidos (igual que un SMS compartido) y se emparejan con la venta.
+  var sondeoReloj = null, sondeando = false, escuchaError = null, ultimoAviso = null;
+
+  function programarSondeo() {
+    if (sondeoReloj) clearTimeout(sondeoReloj);
+    sondeoReloj = null;
+    if (!ESC || !ESC.activo()) return;
+    sondeoReloj = setTimeout(sondear, el.cobroPm && el.cobroPm.open ? 3000 : 20000);
+  }
+
+  function sondearPronto() {
+    if (!ESC || !ESC.activo()) return;
+    if (sondeoReloj) clearTimeout(sondeoReloj);
+    sondeoReloj = setTimeout(sondear, 50);
+  }
+
+  /** Guarda un aviso como pago recibido. Devuelve el pago si es nuevo; null si no sirve o ya estaba. */
+  function guardarAviso(aviso) {
+    var p = PM.parsear(aviso.texto);
+    if (p.enviado || !p.montoBs || !p.referencia) return Promise.resolve(null);
+    return DB.guardarPagoRecibido({ referencia: p.referencia, montoBs: p.montoBs / 100, banco: p.banco, texto: aviso.texto })
+      .then(function (r) { return r.nuevo ? r.pago : null; }, function (e) { console.warn(e); return null; });
+  }
+
+  /** Venta pendiente que corresponde a un pago: misma referencia y monto, o única sin referencia por ese monto. */
+  function ventaParaPago(pendientes, pago) {
+    var monto = cent(pago.montoBs);
+    var igual = function (v) { return desglose(v).restanteBs === monto; };
+    var porRef = pendientes.filter(function (v) { return v.referencia && PM.coincideRef(v.referencia, pago.referencia); });
+    if (porRef.length) return porRef.length === 1 && igual(porRef[0]) ? porRef[0] : null;
+    var sinRef = pendientes.filter(function (v) { return !v.referencia && igual(v); });
+    return sinRef.length === 1 ? sinRef[0] : null;
+  }
+
+  /** Verifica solas las ventas por verificar que cuadran con los pagos nuevos. */
+  function autoVerificar(pagos) {
+    if (!pagos.length) return Promise.resolve(0);
+    return DB.ventasAbiertas().then(function (ventas) {
+      var pendientes = pendientesDe(ventas);
+      var hechas = 0;
+      return pagos.reduce(function (cadena, pago) {
+        return cadena.then(function () {
+          if (pagoEncontrado && pagoEncontrado.referencia === pago.referencia) return;
+          var v = ventaParaPago(pendientes, pago);
+          if (!v) return;
+          return DB.verificarVenta(v.id, { referencia: pago.referencia }).then(function (verificada) {
+            hechas++;
+            pendientes = pendientes.filter(function (x) { return x.id !== v.id; });
+            if (estado.recibo && estado.recibo.id === verificada.id) mostrarRecibo(verificada, true);
+          }, function (e) { console.warn(e); });
+        });
+      }, Promise.resolve()).then(function () {
+        if (!hechas) return 0;
+        return renderVentas().then(function () { return hechas; });
+      });
+    });
+  }
+
+  function sondear() {
+    sondeoReloj = null;
+    if (!ESC || !ESC.activo()) return;
+    if (sondeando || document.visibilityState === 'hidden') return programarSondeo();
+    sondeando = true;
+    ESC.leer().then(function (avisos) {
+      escuchaError = null;
+      if (avisos.length) ultimoAviso = new Date();
+      return avisos.reduce(function (cadena, aviso) {
+        return cadena.then(function (nuevos) {
+          return guardarAviso(aviso).then(function (pago) { if (pago) nuevos.push(pago); return nuevos; });
+        });
+      }, Promise.resolve([]));
+    }).then(function (nuevos) {
+      if (!nuevos.length) return;
+      return cargarPagos().then(function () {
+        if (ventaPorCobrar) {
+          var antes = pagoEncontrado && pagoEncontrado.referencia;
+          evaluarRefCobro();
+          if (pagoEncontrado && pagoEncontrado.referencia !== antes && navigator.vibrate) navigator.vibrate(200);
+        }
+        return autoVerificar(nuevos);
+      });
+    }).catch(function (e) {
+      console.warn(e);
+      escuchaError = e;
+    }).then(function () {
+      sondeando = false;
+      pintarEscuchaEstado();
+      programarSondeo();
+    });
+  }
+
+  function pintarEscuchaEstado() {
+    if (!el.escuchaEstado || !ESC) return;
+    var texto, tipo = '';
+    if (!ESC.activo()) {
+      texto = ESC.hayNube() ? 'Apagada en esta caja.' : 'Apagada. La nube de Cuadre todavía no está lista; puedes unir esta caja con un código.';
+    } else if (escuchaError) {
+      texto = navigator.onLine === false ? 'Activa, pero sin internet. Se pone al día sola al volver la conexión.' : 'Activa, pero no pude hablar con la nube. Reintento solo.';
+      tipo = 'error';
+    } else {
+      texto = 'Activa. ' + (ultimoAviso ? 'Último aviso del banco: ' + fmtHora.format(ultimoAviso) + '.' : 'Esperando avisos de tu banco.');
+      tipo = 'ok';
+    }
+    el.escuchaEstado.textContent = texto;
+    el.escuchaEstado.setAttribute('data-tipo', tipo);
+  }
+
+  function pintarEscucha(mensaje) {
+    if (!el.escucha) return;
+    el.escucha.hidden = !ESC;
+    if (!ESC) return;
+    var activo = ESC.activo();
+    el.escuchaInactivo.hidden = activo;
+    el.escuchaActivo.hidden = !activo;
+    el.escuchaActivar.disabled = !ESC.hayNube();
+    var codigo = ESC.codigo();
+    el.escuchaCodigoVer.textContent = codigo;
+    if (activo) {
+      var texto = 'Código de Cuadre Escucha (' + (estado.comercio.nombre || 'mi comercio') + '). Ábrelo en el teléfono del banco, ' +
+        'cópialo y pégalo en Cuadre Escucha:\n\n' + codigo;
+      el.escuchaWhatsapp.href = 'https://wa.me/?text=' + encodeURIComponent(texto);
+    }
+    poner(el.escuchaCopiar, 'Copiar código');
+    pintarEscuchaEstado();
+    if (mensaje) {
+      el.escuchaEstado.textContent = mensaje.texto;
+      el.escuchaEstado.setAttribute('data-tipo', mensaje.tipo || '');
+    }
+  }
+
+  function escuchaListo(promesa) {
+    return promesa.then(function () {
+      escuchaError = null;
+      pintarEscucha();
+      sondearPronto();
+    }, function (e) {
+      pintarEscucha({ texto: e.message, tipo: 'error' });
+    });
+  }
+
+  function copiarCodigoEscucha() {
+    var codigo = ESC.codigo();
+    var hecho = function () { poner(el.escuchaCopiar, '¡Copiado!'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(codigo).then(hecho, function () { poner(el.escuchaCopiar, 'Mantén presionado el código'); });
+    } else {
+      poner(el.escuchaCopiar, 'Mantén presionado el código');
     }
   }
 
@@ -3161,6 +3345,21 @@
       el.cobroPmCancelar.addEventListener('click', function () { el.cobroPm.close(); });
       el.cobroPm.addEventListener('close', function () { ventaPorCobrar = null; });
       el.cobroPmRef.addEventListener('input', evaluarRefCobro);
+      el.cobroPm.addEventListener('close', programarSondeo);
+    }
+    if (el.escucha && ESC) {
+      el.escuchaActivar.addEventListener('click', function () { escuchaListo(ESC.activar()); });
+      el.escuchaUnir.addEventListener('click', function () {
+        escuchaListo(ESC.unir(el.escuchaCodigo.value).then(function () { el.escuchaCodigo.value = ''; }));
+      });
+      el.escuchaCopiar.addEventListener('click', copiarCodigoEscucha);
+      el.escuchaDesactivar.addEventListener('click', function () {
+        ESC.desactivar();
+        programarSondeo();
+        pintarEscucha();
+      });
+      window.addEventListener('online', sondearPronto);
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') sondearPronto(); });
       el.cobroPmCopiar.addEventListener('click', copiarDatosPM);
       el.cobroPmIrAjustes.addEventListener('click', function () { el.cobroPm.close(); irA('ajustes'); el.ajustePmBanco.focus(); });
     }
@@ -3631,6 +3830,17 @@
       anularCancelar: $('#anular-cancelar'),
       anularConfirmar: $('#anular-confirmar'),
       respaldoExportar: $('#respaldo-exportar'),
+      escucha: $('#escucha'),
+      escuchaEstado: $('#escucha-estado'),
+      escuchaInactivo: $('#escucha-inactivo'),
+      escuchaActivo: $('#escucha-activo'),
+      escuchaActivar: $('#escucha-activar'),
+      escuchaCodigo: $('#escucha-codigo'),
+      escuchaUnir: $('#escucha-unir'),
+      escuchaCodigoVer: $('#escucha-codigo-ver'),
+      escuchaCopiar: $('#escucha-copiar'),
+      escuchaWhatsapp: $('#escucha-whatsapp'),
+      escuchaDesactivar: $('#escucha-desactivar'),
       respaldoImportar: $('#respaldo-importar'),
       respaldoMensaje: $('#respaldo-mensaje'),
       respaldoConfirmacion: $('#respaldo-confirmacion'),
@@ -3663,6 +3873,7 @@
 
     cargarDatos().then(function () {
       if (vistaActual === 'caja') revisarCompartido();
+      sondearPronto();
     }).catch(function (e) {
       console.error(e);
       irA('caja');
@@ -3707,6 +3918,6 @@
     aCentavos: aCentavos, aBsCentavos: aBsCentavos, parsearTasa: parsearTasa,
     calcular: calcular, mensajeWhatsApp: mensajeWhatsApp, enlaceWhatsApp: enlaceWhatsApp, lineasRecibo: lineasRecibo,
     resumirCierre: resumirCierre, mensajeCierre: mensajeCierre, cierreACentavos: cierreACentavos,
-    procesarSMS: procesarSMS, abrirVerificar: abrirVerificar
+    procesarSMS: procesarSMS, abrirVerificar: abrirVerificar, sondear: sondear
   };
 })();
