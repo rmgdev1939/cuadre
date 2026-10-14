@@ -2526,6 +2526,8 @@
       mostrarTasa();
       recalcular();
       irA('caja');
+      // Una sola vez, al estrenar la cuenta: dónde quedan sus datos. Siempre visible luego en Ajustes.
+      if (el.privacidad && !el.privacidad.open) el.privacidad.showModal();
     }).catch(function (err) {
       console.error(err);
       mensajeRegistro('No se pudo crear la cuenta. Intenta de nuevo.');
@@ -3196,7 +3198,8 @@
     // En iOS Safari, :active solo se pinta al tocar si existe algún oyente de touchstart.
     document.addEventListener('touchstart', function () {}, { passive: true });
     // Tocar fuera del recuadro cierra cualquier modal.
-    [el.tasas, el.historial, el.anular, el.cobroPm, el.verificar, el.productos, el.fiar, el.cliente].forEach(function (d) {
+    if (el.privacidad) el.privacidadOk.addEventListener('click', function () { el.privacidad.close(); });
+    [el.tasas, el.historial, el.anular, el.cobroPm, el.verificar, el.productos, el.fiar, el.cliente, el.privacidad].forEach(function (d) {
       if (d) d.addEventListener('click', function (e) { if (e.target === d) d.close(); });
     });
     if (el.tasas) {
@@ -3455,6 +3458,8 @@
     el = {
       marcaLogo: $('#marca-logo'),
       marcaNombre: $('#marca-nombre'),
+      privacidad: $('#privacidad'),
+      privacidadOk: $('#privacidad-ok'),
       tasaTitulo: $('#tasa-titulo'),
       elegirTasa: $('#elegir-tasa'),
       cobroTasa: $('#cobro-tasa'),

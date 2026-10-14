@@ -935,6 +935,37 @@ h1, h2, p { margin: 0; }
 
 /* Respaldo en Ajustes */
 .respaldo { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--borde); }
+/* Privacidad: los datos viven solo en el teléfono */
+.privacidad {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--linea);
+  border-radius: var(--radio-control);
+  background: color-mix(in srgb, var(--primario) 7%, transparent);
+  font-size: .9rem;
+  line-height: 1.4;
+}
+.privacidad strong { display: block; margin-bottom: 2px; }
+.privacidad p + p { margin-top: 6px; }
+.privacidad-alerta { color: var(--fiado); font-weight: 600; }
+:root[data-tema="oscuro"] .privacidad-alerta { color: #fbbf24; }
+.privacidad-icono {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--primario-suave);
+  color: var(--primario-oscuro);
+}
+:root[data-tema="oscuro"] .privacidad-icono { color: var(--primario); }
+.privacidad-hoja { display: grid; justify-items: center; gap: 10px; padding-top: 20px; text-align: center; }
+.privacidad-hoja p { max-width: 32ch; line-height: 1.45; }
+.privacidad-icono-grande { width: 56px; height: 56px; }
+.privacidad-icono-grande .icono { width: 28px; height: 28px; }
 .respaldo-botones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .respaldo-botones .boton { padding: 0 8px; font-size: .95rem; text-align: center; }
 .respaldo-mensaje {
