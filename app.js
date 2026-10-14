@@ -38,6 +38,7 @@
     catalogo: [],            // productos activos (copia de CuadreDB.obtenerCatalogo)
     carrito: {},             // productoId → cantidad de la venta en curso
     dashPeriodo: 'hoy',      // 'hoy' | '7' | '30'
+    dashOrden: 'unidades',   // productos del Resumen: 'unidades' (más vendidos) | 'dinero' (más dinero dejan)
     recibo: null             // última venta cobrada, para el Recibo Exprés
   };
 
@@ -2322,6 +2323,7 @@
       el.clienteComprobante.hidden = false;
       renderVentas();
       if (vistaActual === 'fiado') pintarFiado();
+      if (vistaActual === 'resumen') pintarDashboard();
     }).catch(function (err) {
       console.error(err);
       mensajeCliente('No se pudo registrar el abono. Intenta de nuevo.', 'error');
@@ -2991,22 +2993,30 @@
       b.setAttribute('aria-checked', String(b.getAttribute('data-periodo') === periodo));
     });
     poner(el.dashboardPeriodo, periodo === 'hoy' ? 'Hoy, ' + diaLegible(DB.diaLocal(hoy)) : diaLegible(DB.diaLocal(inicio)) + ' al ' + diaLegible(DB.diaLocal(hoy)));
-    return DB.ventasEntre(DB.diaLocal(inicio), DB.diaLocal(hoy)).then(function (todas) {
-      var validas = todas.filter(function (v) { return !v.anuladaEn; });
-      var r = resumirCierre(validas);
-      // El gráfico y "Cómo te pagaron" son de ventas: los abonos de fiado no cuentan.
-      var ventas = validas.filter(function (v) { return v.tipo !== 'abono'; });
-      pintarKpis(r);
+    // Se lee también el período anterior del mismo largo (ayer, los 7 o 30 días previos) para comparar.
+    var inicioAnterior = sumarDias(inicio, -dias);
+    var diaInicio = DB.diaLocal(inicio);
+    return Promise.all([DB.ventasEntre(DB.diaLocal(inicioAnterior), DB.diaLocal(hoy)), cargarFiado()]).then(function (res) {
+      var validas = res[0].filter(function (v) { return !v.anuladaEn; });
+      var actuales = validas.filter(function (v) { return v.dia >= diaInicio; });
+      var anteriores = validas.filter(function (v) { return v.dia < diaInicio; });
+      var r = resumirCierre(actuales);
+      // El gráfico, los métodos y los productos son de ventas: los abonos de fiado no cuentan.
+      var ventas = actuales.filter(function (v) { return v.tipo !== 'abono'; });
+      pintarKpis(r, resumirCierre(anteriores), periodo);
       pintarGrafico(ventas, periodo, inicio, dias);
       pintarMetodos(ventas, r);
       pintarTopProductos(ventas);
+      pintarStockBajo();
+      pintarFiadoDash(res[1]);
     }).catch(function (e) {
       console.error(e);
       poner(el.dashLectura, 'No se pudieron leer las ventas.');
     });
   }
 
-  function tile(etiqueta, valor, detalle, tono) {
+  /** `cambio` opcional { texto, sube: true|false|null } se pinta como una insignia con flecha. */
+  function tile(etiqueta, valor, detalle, tono, cambio) {
     var d = document.createElement('div');
     d.className = 'dash-kpi';
     if (tono) d.setAttribute('data-tono', tono);
@@ -3014,21 +3024,43 @@
     d.children[0].textContent = etiqueta;
     d.children[1].textContent = valor;
     d.children[2].textContent = detalle || '';
+    if (cambio) {
+      var c = document.createElement('span');
+      c.className = 'dash-cambio';
+      c.setAttribute('data-sube', cambio.sube === null ? 'igual' : String(cambio.sube));
+      c.textContent = cambio.texto;
+      d.appendChild(c);
+    }
     return d;
   }
 
-  function pintarKpis(r) {
+  var NOMBRE_ANTERIOR = { hoy: 'ayer', '7': 'los 7 días previos', '30': 'los 30 días previos' };
+
+  /** Comparación con el período anterior: "▲ 12 % vs ayer", "▼ 5 % …", "= Igual que ayer" o "▲ Nuevo: antes no hubo". */
+  function cambioContra(actual, anterior, periodo) {
+    var contra = NOMBRE_ANTERIOR[periodo];
+    if (!anterior && !actual) return { texto: 'Sin ventas, igual que ' + contra, sube: null };
+    if (!anterior) return { texto: '▲ Nuevo: antes no hubo', sube: true };
+    var pct = Math.round((actual - anterior) / anterior * 100);
+    if (pct === 0) return { texto: '= Igual que ' + contra, sube: null };
+    return { texto: (pct > 0 ? '▲ ' : '▼ ') + Math.abs(pct) + ' % vs ' + contra, sube: pct > 0 };
+  }
+
+  function pintarKpis(r, ant, periodo) {
     el.dashKpis.innerHTML = '';
     var promedio = r.cantidad ? Math.round(r.totalUsd / r.cantidad) : 0;
-    el.dashKpis.appendChild(tile('Vendido', usd(r.totalUsd), bs(r.totalBs)));
-    el.dashKpis.appendChild(tile('Ventas', String(r.cantidad), r.cantidad ? 'Ticket promedio ' + usd(promedio) : 'Sin ventas'));
+    var promedioAnt = ant.cantidad ? Math.round(ant.totalUsd / ant.cantidad) : 0;
+    el.dashKpis.appendChild(tile('Ventas del período', usd(r.totalUsd), bs(r.totalBs), null, cambioContra(r.totalUsd, ant.totalUsd, periodo)));
+    el.dashKpis.appendChild(tile('Número de ventas', String(r.cantidad), 'Antes: ' + ant.cantidad, null, cambioContra(r.cantidad, ant.cantidad, periodo)));
+    el.dashKpis.appendChild(tile('Ticket promedio', usd(promedio), 'Antes: ' + usd(promedioAnt), null,
+      r.cantidad || ant.cantidad ? cambioContra(promedio, promedioAnt, periodo) : null));
     el.dashKpis.appendChild(tile('Efectivo neto', usd(r.efectivoUsd), 'Recibido menos vuelto'));
     el.dashKpis.appendChild(tile('Banco', bs(r.bancoBs), r.puntoBs ? 'Punto ' + bs(r.puntoBs) : 'Pago Móvil'));
     el.dashKpis.appendChild(r.porVerificar
       ? tile('Por verificar', String(r.porVerificar), bs(r.porVerificarBs) + ' en Pago Móvil', 'aviso')
       : tile('Pago Móvil', '✓', 'Todo verificado'));
     if (r.fiadoUsd || r.abonosUsd) {
-      el.dashKpis.appendChild(tile('Fiado', usd(r.fiadoUsd), r.abonosUsd ? 'Abonos cobrados ' + usd(r.abonosUsd) : 'Sin abonos en el período', 'fiado'));
+      el.dashKpis.appendChild(tile('Fiado en el período', usd(r.fiadoUsd), r.abonosUsd ? 'Abonos cobrados ' + usd(r.abonosUsd) : 'Sin abonos en el período', 'fiado'));
     }
   }
 
@@ -3132,6 +3164,7 @@
     if (tono) li.children[2].setAttribute('data-tono', tono);
     li.children[3].textContent = detalle;
     lista.appendChild(li);
+    return li;
   }
 
   function pintarMetodos(ventas, r) {
@@ -3142,8 +3175,11 @@
       if (d.canal === 'punto') punto += d.restanteUsd; else movil += d.restanteUsd;
       fiado += d.fiadoUsd;
     });
+    efectivo = Math.max(0, efectivo);
     var total = Math.max(1, efectivo + movil + punto + fiado);
     el.dashMetodos.innerHTML = '';
+    el.dashMetodosBarra.innerHTML = '';
+    el.dashMetodosBarra.hidden = !r.cantidad;
     if (!r.cantidad) {
       var vacio = document.createElement('li');
       vacio.className = 'venta-vacia';
@@ -3151,10 +3187,23 @@
       el.dashMetodos.appendChild(vacio);
       return;
     }
-    [['Efectivo USD', efectivo, null], ['Pago Móvil', movil, 'bs'], ['Punto de venta', punto, 'bs'], ['Fiado', fiado, 'fiado']].forEach(function (m) {
-      if (!m[1] && (m[0] === 'Punto de venta' || m[0] === 'Fiado')) return;
-      fila(el.dashMetodos, m[0], usd(m[1]), Math.round(m[1] / total * 100) + '%', m[1] / total, m[2]);
+    // Cada método tiene su color fijo (no cambia con el orden ni con el período).
+    var metodos = [['Efectivo USD', efectivo, 'efectivo'], ['Pago Móvil', movil, 'pago-movil'], ['Punto de venta', punto, 'punto'], ['Fiado', fiado, 'fiado']]
+      .filter(function (m) { return m[1] > 0; });
+    var etiqueta = [];
+    metodos.forEach(function (m) {
+      var pct = Math.round(m[1] / total * 100);
+      var seg = document.createElement('span');
+      seg.setAttribute('data-metodo', m[2]);
+      seg.style.flexGrow = String(m[1]);
+      seg.title = m[0] + ': ' + usd(m[1]) + ' (' + pct + ' %)';
+      el.dashMetodosBarra.appendChild(seg);
+      etiqueta.push(m[0] + ' ' + pct + ' %');
+      var li = fila(el.dashMetodos, m[0], usd(m[1]), pct + ' % de lo vendido', m[1] / total, null);
+      li.classList.add('dash-fila-leyenda');
+      li.setAttribute('data-metodo', m[2]);
     });
+    el.dashMetodosBarra.setAttribute('aria-label', 'Ventas por método de pago: ' + etiqueta.join(', '));
   }
 
   function pintarTopProductos(ventas) {
@@ -3167,13 +3216,76 @@
         por[k].usd += Math.round(cent(it.precioUsd) * it.cantidad);
       });
     });
+    var porDinero = estado.dashOrden === 'dinero';
+    Array.prototype.forEach.call(el.dashProductosOrden.querySelectorAll('[data-orden]'), function (b) {
+      b.setAttribute('aria-checked', String(b.getAttribute('data-orden') === estado.dashOrden));
+    });
+    var medida = function (p) { return porDinero ? p.usd : p.cantidad; };
     var top = Object.keys(por).map(function (k) { return por[k]; })
-      .sort(function (a, b) { return b.usd - a.usd; }).slice(0, 5);
+      .sort(function (a, b) { return medida(b) - medida(a) || b.usd - a.usd; }).slice(0, 5);
     el.dashProductosBloque.hidden = !top.length;
     el.dashProductos.innerHTML = '';
-    var max = top.length ? top[0].usd : 1;
-    top.forEach(function (p) {
-      fila(el.dashProductos, p.nombre, usd(p.usd), fmtCantidad(p.cantidad) + (p.cantidad === 1 ? ' unidad' : ' unidades'), p.usd / max);
+    var max = top.length ? medida(top[0]) || 1 : 1;
+    var unidades = function (p) { return fmtCantidad(p.cantidad) + (p.cantidad === 1 ? ' unidad' : ' unidades'); };
+    top.forEach(function (p, i) {
+      fila(el.dashProductos, (i + 1) + '. ' + p.nombre, porDinero ? usd(p.usd) : unidades(p),
+        porDinero ? unidades(p) : 'Dejaron ' + usd(p.usd), medida(p) / max);
+    });
+    ultimasVentasDash = ventas;
+  }
+  var ultimasVentasDash = [];
+
+  /** Productos con control de stock y 5 unidades o menos, del más escaso al menos. */
+  var STOCK_BAJO = 5;
+  function pintarStockBajo() {
+    var bajos = estado.catalogo.filter(function (p) { return p.stock != null && p.stock <= STOCK_BAJO; })
+      .sort(function (a, b) { return a.stock - b.stock || a.nombre.localeCompare(b.nombre, 'es'); });
+    var conStock = estado.catalogo.some(function (p) { return p.stock != null; });
+    el.dashStockBloque.hidden = !conStock;
+    el.dashStock.innerHTML = '';
+    if (!bajos.length) {
+      var ok = document.createElement('li');
+      ok.className = 'dash-stock-ok';
+      ok.textContent = '✓ Todo tiene más de ' + STOCK_BAJO + ' unidades.';
+      el.dashStock.appendChild(ok);
+      return;
+    }
+    bajos.slice(0, 8).forEach(function (p) {
+      var li = document.createElement('li');
+      li.className = 'dash-stock-fila';
+      li.innerHTML = '<span class="dash-stock-nombre"></span><span class="dash-stock-estado"></span>';
+      li.children[0].textContent = p.nombre;
+      var agotado = p.stock <= 0;
+      li.children[1].setAttribute('data-estado', agotado ? 'agotado' : 'bajo');
+      li.children[1].textContent = agotado ? '✕ Agotado' : '! Quedan ' + fmtCantidad(p.stock);
+      el.dashStock.appendChild(li);
+    });
+    if (bajos.length > 8) {
+      var mas = document.createElement('li');
+      mas.className = 'dash-stock-ok';
+      mas.textContent = 'Y ' + plural(bajos.length - 8, 'producto más', 'productos más') + ' en Inventario.';
+      el.dashStock.appendChild(mas);
+    }
+  }
+
+  /** Fiado de todos los días: lo que falta por cobrar y quiénes deben más. */
+  function pintarFiadoDash(saldos) {
+    var deudores = estado.clientes.filter(function (c) { return saldos[c.id] > 0; })
+      .sort(function (a, b) { return saldos[b.id] - saldos[a.id]; });
+    var total = deudores.reduce(function (s, c) { return s + saldos[c.id]; }, 0);
+    el.dashFiadoBloque.hidden = !estado.clientes.length;
+    poner(el.dashFiadoTotal, usd(total));
+    poner(el.dashFiadoDetalle, deudores.length
+      ? plural(deudores.length, 'cliente debe', 'clientes deben') + (tasaActiva() ? ' · ' + bs(aBsCentavos(total, tasaActiva().valor)) + ' a la ' + nombreTasa(estado.tasaCobro) : '')
+      : 'Nadie te debe. ¡Caja sana!');
+    el.dashFiado.innerHTML = '';
+    var max = deudores.length ? saldos[deudores[0].id] : 1;
+    deudores.slice(0, 5).forEach(function (c) {
+      var li = fila(el.dashFiado, c.nombre, usd(saldos[c.id]), Math.round(saldos[c.id] / Math.max(1, total) * 100) + ' % de lo fiado · Toca para cobrar', saldos[c.id] / max, 'fiado');
+      li.setAttribute('data-cliente', String(c.id));
+      li.setAttribute('role', 'button');
+      li.tabIndex = 0;
+      li.classList.add('dash-fila-toque');
     });
   }
 
@@ -3340,6 +3452,16 @@
         var b = e.target.closest('[data-periodo]');
         if (b) { estado.dashPeriodo = b.getAttribute('data-periodo'); pintarDashboard(); }
       });
+      el.dashProductosOrden.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-orden]');
+        if (b) { estado.dashOrden = b.getAttribute('data-orden'); pintarTopProductos(ultimasVentasDash); }
+      });
+      var abrirDeudor = function (e) {
+        var li = e.target.closest('[data-cliente]');
+        if (li && (e.type === 'click' || e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); abrirCliente(li.getAttribute('data-cliente')); }
+      };
+      el.dashFiado.addEventListener('click', abrirDeudor);
+      el.dashFiado.addEventListener('keydown', abrirDeudor);
       el.dashGrafico.addEventListener('click', function (e) {
         var g = e.target.closest('[data-barra]');
         leerBarra(g ? Number(g.getAttribute('data-barra')) : null);
@@ -3624,6 +3746,14 @@
       dashLectura: $('#dash-lectura'),
       dashMetodos: $('#dash-metodos'),
       dashProductosBloque: $('#dash-productos-bloque'),
+      dashProductosOrden: $('#dash-productos-orden'),
+      dashMetodosBarra: $('#dash-metodos-barra'),
+      dashStockBloque: $('#dash-stock-bloque'),
+      dashStock: $('#dash-stock'),
+      dashFiadoBloque: $('#dash-fiado-bloque'),
+      dashFiadoTotal: $('#dash-fiado-total'),
+      dashFiadoDetalle: $('#dash-fiado-detalle'),
+      dashFiado: $('#dash-fiado'),
       dashProductos: $('#dash-productos'),
       cobroPm: $('#cobro-pm'),
       cobroPmForm: $('#cobro-pm-form'),
