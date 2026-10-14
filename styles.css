@@ -351,6 +351,59 @@ h1, h2, p { margin: 0; }
 .tasa-sec-fecha { font-size: .75rem; color: var(--texto-suave); }
 .tasa-sec-fecha:empty { display: none; }
 
+/* Elegir la tasa de cobro: un toque en la pizarra */
+.elegir-tasa { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.tasa-opcion {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  min-height: var(--toque);
+  padding: 9px 12px;
+  border: 1.5px solid var(--linea);
+  border-radius: var(--radio-control);
+  background: color-mix(in srgb, var(--texto) 3%, transparent);
+  color: var(--texto);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s var(--suave), background-color .15s var(--suave), box-shadow .15s var(--suave);
+}
+.tasa-opcion:active { transform: scale(.98); }
+.tasa-opcion:focus-visible { outline: 3px solid var(--primario); outline-offset: 2px; }
+.tasa-opcion-nombre { font-size: .78rem; font-weight: 650; color: var(--texto-suave); }
+.tasa-opcion-valor { font-size: 1.15rem; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.tasa-opcion-fecha { max-width: 100%; overflow: hidden; font-size: .72rem; color: var(--texto-suave); white-space: nowrap; text-overflow: ellipsis; }
+.tasa-opcion-fecha:empty { display: none; }
+.tasa-opcion[aria-checked="true"] {
+  border-color: var(--primario);
+  background: var(--primario-suave);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primario) 14%, transparent);
+}
+.tasa-opcion[aria-checked="true"] .tasa-opcion-nombre { color: var(--primario-oscuro); }
+:root[data-tema="oscuro"] .tasa-opcion[aria-checked="true"] .tasa-opcion-nombre { color: var(--primario); }
+.tasa-opcion[aria-checked="true"] .tasa-opcion-nombre::before { content: "✓ "; }
+.elegir-tasa-nota { margin-top: 2px; font-size: .75rem; color: var(--texto-suave); }
+
+/* Etiqueta de la tasa de cobro junto a los Bs (Caja y Cierre) */
+.cobro-tasa {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--primario-suave);
+  color: var(--primario-oscuro);
+  font-size: .72rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+  vertical-align: middle;
+}
+:root[data-tema="oscuro"] .cobro-tasa { color: var(--primario); }
+.cobro-tasa:empty { display: none; }
+.cierre-tasa { align-self: flex-start; margin: 6px 0 0; padding: 4px 10px; border-radius: 10px; line-height: 1.35; }
+
 /* Calculadora */
 .pos-cabecera {
   display: flex;
@@ -540,6 +593,9 @@ h1, h2, p { margin: 0; }
 }
 .resultado-destacado .cifra-secundaria { color: inherit; font-weight: 700; opacity: .92; }
 .resultado-linea .cifra { font-size: 1.4rem; }
+.resultado-linea .cifra { white-space: nowrap; }
+.resultado-linea > .etiqueta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.resultado-linea .cobro-tasa { margin-left: 0; }
 .cifra-secundaria:empty { display: none; }
 
 .aviso {
