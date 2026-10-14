@@ -388,12 +388,31 @@
         <p id="dash-lectura" class="dash-lectura" role="status"></p>
       </section>
       <section class="dash-bloque" aria-labelledby="dash-metodos-titulo">
-        <span id="dash-metodos-titulo" class="etiqueta">Cómo te pagaron (USD)</span>
+        <span id="dash-metodos-titulo" class="etiqueta">Ventas por método de pago (USD)</span>
+        <div id="dash-metodos-barra" class="dash-pila" role="img"></div>
         <ul id="dash-metodos" class="dash-filas"></ul>
       </section>
       <section id="dash-productos-bloque" class="dash-bloque" aria-labelledby="dash-productos-titulo" hidden>
-        <span id="dash-productos-titulo" class="etiqueta">Productos más vendidos</span>
+        <div class="dash-bloque-cabecera">
+          <span id="dash-productos-titulo" class="etiqueta">Productos</span>
+          <div id="dash-productos-orden" class="segmentos segmentos-chicos" role="radiogroup" aria-label="Ordenar productos">
+            <button type="button" class="boton segmento" role="radio" data-orden="unidades" aria-checked="true">Más vendidos</button>
+            <button type="button" class="boton segmento" role="radio" data-orden="dinero" aria-checked="false">Más dinero</button>
+          </div>
+        </div>
         <ul id="dash-productos" class="dash-filas"></ul>
+      </section>
+      <section id="dash-stock-bloque" class="dash-bloque" aria-labelledby="dash-stock-titulo" hidden>
+        <span id="dash-stock-titulo" class="etiqueta">Poco stock</span>
+        <ul id="dash-stock" class="dash-stock"></ul>
+      </section>
+      <section id="dash-fiado-bloque" class="dash-bloque" aria-labelledby="dash-fiado-titulo" hidden>
+        <span id="dash-fiado-titulo" class="etiqueta">Fiado · por cobrar hoy</span>
+        <div class="dash-fiado-total">
+          <strong id="dash-fiado-total" class="dash-kpi-valor"></strong>
+          <span id="dash-fiado-detalle" class="dash-kpi-detalle"></span>
+        </div>
+        <ul id="dash-fiado" class="dash-filas"></ul>
       </section>
     </div>
    </div>
