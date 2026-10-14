@@ -1370,6 +1370,92 @@ h1, h2, p { margin: 0; }
 .dash-fila-barra > span { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--primario-oscuro), var(--primario)); }
 .dash-fila-barra[data-tono="bs"] > span { background: linear-gradient(90deg, color-mix(in srgb, var(--bs) 75%, #000), var(--bs)); }
 .dash-fila-detalle { grid-column: 1 / -1; font-size: .8rem; color: var(--texto-suave); font-weight: 600; }
+
+/* Resumen: comparación con el período anterior, métodos, productos, stock y fiado */
+:root {
+  /* Colores fijos por método de pago (validados para daltonismo; no cambian con el tema de color). */
+  --metodo-efectivo: #047857;
+  --metodo-pago-movil: #1d4ed8;
+  --metodo-punto: #db2777;
+  --metodo-fiado: #b45309;
+}
+:root[data-tema="oscuro"] {
+  --metodo-efectivo: #0d9488;
+  --metodo-pago-movil: #3b82f6;
+  --metodo-punto: #ec4899;
+  --metodo-fiado: #d97706;
+}
+.dash-cambio {
+  justify-self: start;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--texto) 7%, transparent);
+  color: var(--texto-suave);
+  font-size: .76rem;
+  font-weight: 700;
+}
+.dash-cambio[data-sube="true"] { background: color-mix(in srgb, var(--exito) 14%, transparent); color: var(--exito); }
+.dash-cambio[data-sube="false"] { background: var(--peligro-suave); color: var(--peligro); }
+:root[data-tema="oscuro"] .dash-cambio[data-sube="true"] { color: #4ade80; }
+:root[data-tema="oscuro"] .dash-cambio[data-sube="false"] { background: rgba(248, 113, 113, .14); color: #fca5a5; }
+.dash-kpi:first-child .dash-cambio,
+:root[data-tema="oscuro"] .dash-kpi:first-child .dash-cambio[data-sube] { background: rgba(255, 255, 255, .22); color: inherit; }
+
+.dash-pila { display: flex; gap: 2px; height: 16px; border-radius: 8px; overflow: hidden; }
+.dash-pila[hidden] { display: none; }
+.dash-pila > span { min-width: 4px; flex-basis: 0; }
+[data-metodo="efectivo"] { --metodo: var(--metodo-efectivo); }
+[data-metodo="pago-movil"] { --metodo: var(--metodo-pago-movil); }
+[data-metodo="punto"] { --metodo: var(--metodo-punto); }
+[data-metodo="fiado"] { --metodo: var(--metodo-fiado); }
+.dash-pila > span { background: var(--metodo); }
+.dash-fila-leyenda .dash-fila-nombre::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 3px;
+  background: var(--metodo);
+  vertical-align: 0;
+}
+.dash-fila-leyenda .dash-fila-barra > span { background: var(--metodo); }
+
+.dash-bloque-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.segmentos-chicos { grid-template-columns: repeat(2, auto); }
+.segmentos-chicos .segmento { min-height: 34px; padding: 0 12px; font-size: .8rem; }
+
+.dash-stock { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.dash-stock-fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--linea);
+  border-radius: var(--radio-control);
+}
+.dash-stock-nombre { min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+.dash-stock-estado { flex: none; padding: 2px 10px; border-radius: 999px; font-size: .8rem; font-weight: 750; }
+.dash-stock-estado[data-estado="bajo"] { background: #fef3c7; color: #92400e; }
+.dash-stock-estado[data-estado="agotado"] { background: var(--peligro-suave); color: var(--peligro); }
+:root[data-tema="oscuro"] .dash-stock-estado[data-estado="bajo"] { background: #3b2a00; color: #fde68a; }
+:root[data-tema="oscuro"] .dash-stock-estado[data-estado="agotado"] { background: rgba(248, 113, 113, .14); color: #fca5a5; }
+.dash-stock-ok { font-size: .88rem; font-weight: 600; color: var(--texto-suave); }
+
+.dash-fiado-total {
+  display: grid;
+  gap: 2px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--fiado) 30%, transparent);
+  border-radius: 18px;
+  background: var(--fiado-suave);
+}
+.dash-fiado-total .dash-kpi-valor { color: var(--fiado); font-size: 1.8rem; }
+.dash-fila-toque { margin: -6px; padding: 6px; border-radius: 12px; cursor: pointer; }
+.dash-fila-toque:active { background: color-mix(in srgb, var(--texto) 6%, transparent); }
+.dash-fila-toque:focus-visible { outline: 3px solid var(--primario); outline-offset: 0; }
 .panel-cabecera { flex-direction: column; gap: 4px; }
 .menu-boton svg { box-sizing: content-box; width: 40px; height: 22px; padding: 3px 10px; border-radius: 999px; stroke-width: 1.8; transition: background-color .2s ease, box-shadow .2s ease; }
 .menu-boton[aria-current="page"] svg { background: color-mix(in srgb, var(--primario) 14%, transparent); }
