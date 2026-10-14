@@ -559,7 +559,15 @@
         </section>
 
         <section class="respaldo" aria-labelledby="respaldo-titulo">
-          <span id="respaldo-titulo" class="etiqueta">Respaldo de datos</span>
+          <span id="respaldo-titulo" class="etiqueta">Privacidad y respaldo</span>
+          <div id="privacidad-ajustes" class="privacidad">
+            <span class="privacidad-icono"><svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+            <div>
+              <strong>Tus datos están solo en este teléfono</strong>
+              <p>Tus ventas, clientes e inventario se guardan solo aquí. Nadie más, ni siquiera nosotros, puede verlos. Cuadre solo usa internet para buscar las tasas del día.</p>
+              <p class="privacidad-alerta">Si pierdes o cambias el teléfono sin un respaldo, esos datos se pierden. Exporta un respaldo seguido y guárdalo fuera del teléfono (por ejemplo, en tu correo o en Drive).</p>
+            </div>
+          </div>
           <p class="modal-nota">Guarda un archivo con todas las ventas, cierres y ajustes. Si cambias o limpias el teléfono, lo importas y recuperas todo.</p>
           <div class="respaldo-botones">
             <button id="respaldo-exportar" type="button" class="boton boton-terciario">Exportar respaldo</button>
@@ -863,6 +871,19 @@
         <ul id="verificar-lista" class="ventas-lista"></ul>
       </div>
       <button id="verificar-manual" type="button" class="boton boton-terciario" hidden>Ya lo vi en mi banco: marcar verificado</button>
+    </div>
+  </dialog>
+
+  <!-- Aviso de privacidad: se muestra una vez, al crear la cuenta -->
+  <dialog id="privacidad" class="modal" aria-labelledby="privacidad-titulo">
+    <div class="modal-cuerpo privacidad-hoja">
+      <span class="privacidad-icono privacidad-icono-grande"><svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+      <h2 id="privacidad-titulo" class="subtitulo">Tus datos son tuyos</h2>
+      <p>Tus ventas, clientes e inventario se guardan solo en este teléfono. Nadie más, ni siquiera nosotros, puede verlos.</p>
+      <p class="modal-nota">Haz un respaldo de vez en cuando desde Ajustes: si pierdes el teléfono sin respaldo, se pierden los datos.</p>
+    </div>
+    <div class="modal-acciones">
+      <button id="privacidad-ok" type="button" class="boton boton-primario">Entendido</button>
     </div>
   </dialog>
 
