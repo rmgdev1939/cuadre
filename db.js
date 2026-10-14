@@ -10,7 +10,9 @@
  *                canalBs ('pago-movil' | 'punto'), referencia, verificadaEn, verificacion ('sms' | 'manual'), refBanco,
  *                items: [{ productoId, nombre, precioUsd, cantidad }] }
  *       Los campos de la segunda línea llegaron con el pago mixto; las ventas anteriores no los tienen.
- *       tasaEur y tasaParalelo son solo referencia para el recibo (opcionales); los cálculos usan `tasa` (BCV USD).
+ *       tasaEur y tasaParalelo son solo referencia para el recibo (opcionales); los cálculos usan `tasa`.
+ *       tasaTipo dice qué tasa se usó para cobrar: 'bcv' | 'eur' | 'paralelo' (Binance) | 'manual' (modificada).
+ *       Las ventas sin tasaTipo se cobraron con la tasa BCV USD.
  *       cierreId solo existe en ventas archivadas por un cierre de caja; sin él, la venta está "abierta".
  *       anuladaEn (ISO) marca una venta anulada: no se borra, pero no suma en los totales. Solo se anulan ventas abiertas.
  *       canalBs dice cómo se cobraron los Bs (metodo 'punto' = todo por punto de venta). Una venta con
@@ -23,10 +25,12 @@
  *       y al cierre como dinero, pero no cuenta como venta. Saldo del cliente = fiados − abonos, sin anulados.
  *       índice 'dia'
  *   - 'config' { clave, ... }
- *       'tasa'          { clave, valor, fecha }  → tasa BCV USD (la única que usan los cálculos)
- *       'tasa-eur'      { clave, valor, fecha }  → tasa EUR (referencia)
- *       'tasa-paralelo' { clave, valor, fecha }  → tasa Paralelo/Binance (referencia)
- *       'comercio'      { clave, nombre, contacto, logo (data URL Base64 o null), tema,
+ *       'tasa'          { clave, valor, fecha }  → tasa BCV USD
+ *       'tasa-eur'      { clave, valor, fecha }  → tasa BCV EUR
+ *       'tasa-paralelo' { clave, valor, fecha }  → tasa Paralelo/Binance
+ *       'tasa-manual'   { clave, valor, fecha }  → tasa modificada (escrita a mano)
+ *       La tasa con la que se cobra la elige el comerciante: comercio.tasaCobro (por defecto 'bcv').
+ *       'comercio'      { clave, nombre, contacto, logo (data URL Base64 o null), tema, tasaCobro,
  *                         pmBanco (código, p. ej. '0134'), pmTelefono, pmDocumento }  → datos de Pago Móvil del comercio
  *       'catalogo'      { clave, sigId, lista: [{ id, nombre, precioUsd, stock (número o null = sin control), activo, foto? }] }
  *                       → inventario. Vender con items descuenta stock en la misma transacción; anular lo devuelve.
@@ -132,7 +136,8 @@
   }
 
   /** Tipo de tasa → clave en 'config'. 'bcv' conserva la clave original 'tasa'. */
-  var CLAVES_TASA = { bcv: 'tasa', eur: 'tasa-eur', paralelo: 'tasa-paralelo' };
+  var CLAVES_TASA = { bcv: 'tasa', eur: 'tasa-eur', paralelo: 'tasa-paralelo', manual: 'tasa-manual' };
+  var TIPOS_TASA = Object.keys(CLAVES_TASA);
 
   function claveTasa(tipo) {
     var clave = CLAVES_TASA[tipo || 'bcv'];
@@ -180,10 +185,12 @@
     });
   }
 
-  /** Las tres tasas: { bcv, eur, paralelo }, cada una { valor, fecha } o null. */
+  /** Las cuatro tasas: { bcv, eur, paralelo, manual }, cada una { valor, fecha } o null. */
   function obtenerTasas() {
-    return Promise.all([obtenerTasa('bcv'), obtenerTasa('eur'), obtenerTasa('paralelo')]).then(function (t) {
-      return { bcv: t[0], eur: t[1], paralelo: t[2] };
+    return Promise.all(TIPOS_TASA.map(obtenerTasa)).then(function (t) {
+      var r = {};
+      TIPOS_TASA.forEach(function (tipo, i) { r[tipo] = t[i]; });
+      return r;
     });
   }
 
@@ -193,6 +200,7 @@
     nombre: '', contacto: '', logo: null, tema: null, pmBanco: '', pmTelefono: '', pmDocumento: '',
     colores: null,      // paleta sacada del logo { primario, primarioOscuro, primarioSuave, fondo, bs, bsSuave, tecla, teclaActiva }
     registrado: false,  // true tras el registro inicial
+    tasaCobro: 'bcv',   // con qué tasa se cobra: 'bcv' | 'eur' | 'paralelo' | 'manual'
     pinHash: '', pinSal: '' // PIN para entrar: SHA-256 de sal + PIN (nunca el PIN en claro)
   };
   var CLAVES_COLORES = ['primario', 'primarioOscuro', 'primarioSuave', 'fondo', 'bs', 'bsSuave', 'tecla', 'teclaActiva'];
@@ -208,6 +216,7 @@
     if (TEMAS.indexOf(a.tema) === -1) a.tema = null; // null = aún no elegido
     if (!coloresValidos(a.colores)) a.colores = null;
     if (a.tema === 'logo' && !a.colores) a.tema = null;
+    if (TIPOS_TASA.indexOf(a.tasaCobro) === -1) a.tasaCobro = 'bcv';
     a.registrado = !!a.registrado;
     return a;
   }
@@ -230,6 +239,9 @@
     });
     if (permitido.tema != null && TEMAS.indexOf(permitido.tema) === -1) {
       return Promise.reject(new Error('Tema desconocido: ' + permitido.tema));
+    }
+    if (permitido.tasaCobro !== undefined && TIPOS_TASA.indexOf(permitido.tasaCobro) === -1) {
+      return Promise.reject(new Error('Tasa de cobro desconocida: ' + permitido.tasaCobro));
     }
     if (permitido.colores != null && !coloresValidos(permitido.colores)) {
       return Promise.reject(new Error('Colores inválidos.'));
@@ -276,6 +288,8 @@
       if (venta[campo] != null) registro[campo] = Number(venta[campo]);
     });
     if (venta.metodo) registro.metodo = String(venta.metodo);
+    // Con qué tasa se cobró (sin el campo = BCV, como las ventas anteriores).
+    if (TIPOS_TASA.indexOf(venta.tasaTipo) !== -1) registro.tasaTipo = venta.tasaTipo;
     // Tasas de referencia vigentes al cobrar (para el recibo).
     ['tasaEur', 'tasaParalelo'].forEach(function (campo) {
       if (venta[campo] != null && Number(venta[campo]) > 0) registro[campo] = Number(venta[campo]);
@@ -751,6 +765,7 @@
       if (r.clave === 'comercio') {
         if (r.logo != null && !(typeof r.logo === 'string' && /^data:image\//.test(r.logo))) fallo('el logo no es una imagen');
         if (r.tema != null && TEMAS.indexOf(r.tema) === -1) fallo('el tema no existe');
+        if (r.tasaCobro != null && TIPOS_TASA.indexOf(r.tasaCobro) === -1) fallo('la tasa de cobro no existe');
       }
     });
 
@@ -790,6 +805,7 @@
     obtenerAjustes: obtenerAjustes,
     guardarAjustes: guardarAjustes,
     TEMAS: TEMAS.slice(),
+    TIPOS_TASA: TIPOS_TASA.slice(),
     registrarVenta: registrarVenta,
     ventasDelDia: ventasDelDia,
     ventasAbiertas: ventasAbiertas,
