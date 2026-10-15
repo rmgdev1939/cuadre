@@ -1,13 +1,13 @@
 /*
  * CUADRE · app.js
  * Calculadora de pagos mixtos: total de la factura en USD, efectivo recibido en USD
- * y, con la tasa BCV activa, el restante a cobrar en Bs (Pago Móvil) o el vuelto en USD.
+ * y, con la tasa de cobro elegida, el restante a cobrar en Bs (Pago Móvil) o el vuelto en USD.
  * Al cobrar registra la venta (db.js, window.CuadreDB) y muestra el Recibo Exprés
  * con envío por WhatsApp. "Cerrar Caja" resume las ventas abiertas y las archiva; desde ahí
  * se consultan y reenvían los cierres anteriores. Las ventas abiertas se pueden anular (quedan
  * tachadas y fuera de los totales, nunca se borran). Ajustes exporta e importa un respaldo JSON.
- * La pizarra muestra la tasa BCV USD (la única que usan los cálculos) y, como referencia,
- * las tasas EUR y Paralelo/Binance. Ajustes guarda el nombre, RIF/teléfono, logo y tema del comercio.
+ * La pizarra muestra las tasas BCV dólar, BCV euro, Binance y una modificada (escrita a mano); el
+ * comerciante toca la que usa para cobrar y cada venta guarda cuál fue (tasaTipo) y su valor. Ajustes guarda el nombre, RIF/teléfono, logo y tema del comercio.
  * Los Bs se cobran por Pago Móvil o Punto de venta. El Pago Móvil abre una hoja con el monto exacto,
  * los datos del comercio y la referencia; la venta queda "por verificar" hasta emparejarla con el SMS
  * del banco del comerciante (compartido a la app o pegado; pagomovil.js lo lee).
@@ -27,8 +27,8 @@
 
   // ---------- Estado ----------
   var estado = {
-    tasa: null,              // tasa BCV USD { valor, fecha } o null
-    tasasRef: { eur: null, paralelo: null }, // tasas de referencia { valor, fecha } o null
+    tasas: { bcv: null, eur: null, paralelo: null, manual: null }, // cada una { valor, fecha, fuente? } o null
+    tasaCobro: 'bcv',        // la tasa con la que se cobra (preferencia guardada en comercio.tasaCobro)
     comercio: { nombre: '', contacto: '', logo: null, tema: null },
     campoActivo: 'total',    // 'total' | 'recibido' (efectivo USD)
     entrada: { total: '', recibido: '' }, // texto tecleado, p. ej. "12.5"
@@ -39,6 +39,7 @@
     catalogo: [],            // productos activos (copia de CuadreDB.obtenerCatalogo)
     carrito: {},             // productoId → cantidad de la venta en curso
     dashPeriodo: 'hoy',      // 'hoy' | '7' | '30'
+    dashOrden: 'unidades',   // productos del Resumen: 'unidades' (más vendidos) | 'dinero' (más dinero dejan)
     recibo: null             // última venta cobrada, para el Recibo Exprés
   };
 
@@ -90,37 +91,80 @@
   }
 
   // ---------- Pizarra de tasas ----------
+  var TIPOS_TASA = ['bcv', 'eur', 'paralelo', 'manual'];
+  var NOMBRE_TASA = { bcv: 'Tasa BCV', eur: 'Tasa Euro', paralelo: 'Tasa Binance', manual: 'Tasa modificada' };
+
+  /** Tipo de tasa de una venta o preferencia; sin tipo (ventas anteriores) = BCV. */
+  function tipoTasa(tipo) { return NOMBRE_TASA[tipo] ? tipo : 'bcv'; }
+  function nombreTasa(tipo) { return NOMBRE_TASA[tipoTasa(tipo)]; }
+
+  /** La tasa con la que se cobra ahora: { tipo, valor, fecha, ... } o null si esa tasa aún no tiene valor. */
+  function tasaActiva() {
+    var t = estado.tasas[estado.tasaCobro];
+    return t ? Object.assign({ tipo: estado.tasaCobro }, t) : null;
+  }
+
+  /** "Tasa Binance 42,10" (o solo la etiqueta si aún no tiene valor). */
+  function etiquetaTasaActiva() {
+    var t = tasaActiva();
+    return nombreTasa(estado.tasaCobro) + (t ? ' ' + fmtTasa.format(t.valor) : '');
+  }
+
   function mostrarTasa() {
-    if (estado.tasa) {
-      poner(el.tasaActual, fmtTasa.format(estado.tasa.valor));
-      poner(el.tasaFecha, origenTasa(estado.tasa, 'bcv'));
+    var activa = tasaActiva(), nombre = nombreTasa(estado.tasaCobro);
+    poner(el.tasaTitulo, 'Cobras con ' + nombre);
+    if (activa) {
+      poner(el.tasaActual, fmtTasa.format(activa.valor));
+      poner(el.tasaFecha, origenTasa(activa, activa.tipo));
     } else {
       poner(el.tasaActual, 'Sin tasa');
-      poner(el.tasaFecha, 'Conéctate a internet o toca «Editar Tasas» para escribir la tasa BCV del día');
+      poner(el.tasaFecha, estado.tasaCobro === 'manual'
+        ? 'Toca «Editar Tasas» y escribe tu tasa modificada'
+        : 'Conéctate a internet o toca «Editar Tasas» para escribir la ' + nombre + ' del día');
     }
-    [['eur', el.tasaEur, el.tasaEurFecha], ['paralelo', el.tasaParalelo, el.tasaParaleloFecha]].forEach(function (x) {
-      var t = estado.tasasRef[x[0]];
-      poner(x[1], t ? 'Bs ' + fmtMonto.format(t.valor) : '—');
-      poner(x[2], origenTasa(t, x[0]));
+    TIPOS_TASA.forEach(function (tipo) {
+      var t = estado.tasas[tipo];
+      var boton = el.elegirTasa && el.elegirTasa.querySelector('[data-tasa="' + tipo + '"]');
+      if (!boton) return;
+      boton.setAttribute('aria-checked', String(tipo === estado.tasaCobro));
+      poner(boton.querySelector('.tasa-opcion-valor'), t ? fmtTasa.format(t.valor) : '—');
+      poner(boton.querySelector('.tasa-opcion-fecha'), t ? origenTasa(t, tipo) : (tipo === 'manual' ? 'Escríbela tú' : 'Sin registrar'));
     });
+    poner(el.cobroTasa, etiquetaTasaActiva());
+  }
+
+  /** Un toque en la pizarra cambia la tasa de cobro y queda guardada como preferencia. */
+  function elegirTasaCobro(tipo) {
+    if (!NOMBRE_TASA[tipo]) return;
+    estado.tasaCobro = tipo;
+    estado.comercio.tasaCobro = tipo;
+    mostrarTasa();
+    recalcular();
+    DB.guardarAjustes({ tasaCobro: tipo }).catch(function (e) {
+      console.error(e);
+      avisar('No se pudo guardar la tasa elegida. Intenta de nuevo.');
+    });
+    // Si esa tasa aún no tiene valor, se abre el diálogo para escribirla.
+    if (!estado.tasas[tipo]) abrirTasas(tipo);
   }
 
 
   /** De dónde salió la tasa y de cuándo es: "DolarAPI · vigente 03/10" o "Manual · 03/10 09:15". */
   function origenTasa(t, tipo) {
     if (!t) return 'Sin registrar';
-    if (!t.fuente) return 'Manual · ' + fmtFechaCorta.format(new Date(t.fecha));
+    if (!t.fuente) return (tipo === 'manual' ? 'Escrita a mano · ' : 'Manual · ') + fmtFechaCorta.format(new Date(t.fecha));
     var f = new Date(t.fechaFuente || t.fecha);
     return t.fuente + ' · ' + (tipo === 'paralelo' ? fmtFechaCorta.format(f) : 'vigente ' + fmtDiaMes.format(f));
   }
 
   /** [tipo, input] de cada tasa en el diálogo Editar Tasas. */
   function camposTasas() {
-    return [['bcv', el.tasaInput], ['eur', el.tasaEurInput], ['paralelo', el.tasaParaleloInput]];
+    return [['bcv', el.tasaInput], ['eur', el.tasaEurInput], ['paralelo', el.tasaParaleloInput], ['manual', el.tasaManualInput]]
+      .filter(function (c) { return c[1]; });
   }
 
   function tasaGuardada(tipo) {
-    return tipo === 'bcv' ? estado.tasa : estado.tasasRef[tipo];
+    return estado.tasas[tipo] || null;
   }
 
   function mensajeTasas(texto) {
@@ -128,7 +172,8 @@
     el.tasasMensaje.hidden = !texto;
   }
 
-  function abrirTasas() {
+  /** `foco` = tipo de tasa a escribir (p. ej. al elegir una tasa que aún no tiene valor). */
+  function abrirTasas(foco) {
     if (!el.tasas) return;
     camposTasas().forEach(function (c) {
       var t = tasaGuardada(c[0]);
@@ -138,8 +183,10 @@
     });
     mensajeTasas('');
     if (!el.tasas.open) el.tasas.showModal();
-    // Sin tasa BCV, el cursor va directo a ella; si ya hay, no se abre el teclado del teléfono.
-    if (!estado.tasa) el.tasaInput.focus(); else el.tasasCerrar.focus();
+    // Sin la tasa de cobro, el cursor va directo a ella; si ya hay, no se abre el teclado del teléfono.
+    var tipo = typeof foco === 'string' ? foco : (!tasaActiva() ? estado.tasaCobro : null);
+    var campo = tipo && camposTasas().filter(function (c) { return c[0] === tipo; })[0];
+    if (campo) campo[1].focus(); else el.tasasCerrar.focus();
   }
 
   /** Guarda solo las tasas escritas; cada una registra su propia fecha y hora. */
@@ -161,20 +208,19 @@
       }
       cambios.push([tipo, valor]);
     }
-    if (!estado.tasa && !cambios.some(function (c) { return c[0] === 'bcv'; })) {
-      el.tasaInput.setAttribute('aria-invalid', 'true');
-      el.tasaInput.focus();
-      mensajeTasas('La tasa BCV USD es necesaria para cobrar.');
+    var cobro = estado.tasaCobro;
+    var campoCobro = campos.filter(function (c) { return c[0] === cobro; })[0];
+    if (!tasaActiva() && campoCobro && !cambios.some(function (c) { return c[0] === cobro; })) {
+      campoCobro[1].setAttribute('aria-invalid', 'true');
+      campoCobro[1].focus();
+      mensajeTasas('Cobras con la ' + nombreTasa(cobro) + ': escríbela para poder cobrar.');
       return;
     }
     if (!cambios.length) { el.tasas.close(); return; }
 
     el.tasaGuardar.disabled = true;
     Promise.all(cambios.map(function (c) { return DB.guardarTasa(c[1], c[0]); })).then(function (guardadas) {
-      cambios.forEach(function (c, i) {
-        if (c[0] === 'bcv') estado.tasa = guardadas[i];
-        else estado.tasasRef[c[0]] = guardadas[i];
-      });
+      cambios.forEach(function (c, i) { estado.tasas[c[0]] = guardadas[i]; });
       mostrarTasa();
       recalcular();
       el.tasas.close();
@@ -235,7 +281,7 @@
       var cambian = llegaron.filter(function (t) { return debeReemplazar(tasaGuardada(t), r[t]); });
       return Promise.all(cambian.map(function (t) {
         return DB.guardarTasa(r[t].valor, t, { fuente: r[t].fuente, fechaFuente: r[t].fechaFuente }).then(function (g) {
-          if (t === 'bcv') estado.tasa = g; else estado.tasasRef[t] = g;
+          estado.tasas[t] = g;
         });
       })).then(function () {
         if (!llegaron.length) {
@@ -260,7 +306,7 @@
 
   /** En el registro, la tasa BCV ya viene puesta si se pudo consultar. */
   function llenarTasaRegistro() {
-    if (el.registroTasa && !el.registroTasa.value && estado.tasa) el.registroTasa.value = fmtTasa.format(estado.tasa.valor);
+    if (el.registroTasa && !el.registroTasa.value && estado.tasas.bcv) el.registroTasa.value = fmtTasa.format(estado.tasas.bcv.valor);
   }
 
   // ---------- Ajustes del comercio (marca y tema) ----------
@@ -659,9 +705,11 @@
   function calcular() {
     var total = aCentavos(estado.entrada.total);
     var efectivo = aCentavos(estado.entrada.recibido) || 0;
-    var tasa = estado.tasa ? estado.tasa.valor : null;
+    var activa = tasaActiva();
+    var tasa = activa ? activa.valor : null;
+    var faltaTasa = 'Falta la ' + nombreTasa(estado.tasaCobro) + ': toca «Editar Tasas».';
     var r = {
-      total: total, efectivo: efectivo, tasa: tasa,
+      total: total, efectivo: efectivo, tasa: tasa, tasaTipo: estado.tasaCobro,
       totalBs: null, modo: 'restante',
       vueltoUsd: 0, vueltoBs: 0, restanteUsd: 0, restanteBs: 0,
       aviso: '', valido: false
@@ -669,7 +717,7 @@
 
     if (total === null || total === 0) {
       // Sin total no hay aviso: el campo vacío y el botón deshabilitado bastan (también tras cobrar).
-      if (!tasa) r.aviso = 'Falta la tasa BCV del día.';
+      if (!tasa) r.aviso = faltaTasa;
       return r;
     }
 
@@ -679,7 +727,7 @@
     else { r.modo = 'restante'; r.restanteUsd = -diferencia; }
 
     if (!tasa) {
-      r.aviso = 'Falta la tasa BCV del día.';
+      r.aviso = faltaTasa;
       return r;
     }
 
@@ -778,11 +826,12 @@
       restanteUsd: r.restanteUsd / 100,
       restanteBs: r.restanteBs / 100,
       metodo: metodoDePago(r),
-      tasa: r.tasa
+      tasa: r.tasa,
+      tasaTipo: r.tasaTipo
     };
     // Tasas de referencia vigentes, para el recibo (no intervienen en el cálculo).
-    if (estado.tasasRef.eur) venta.tasaEur = estado.tasasRef.eur.valor;
-    if (estado.tasasRef.paralelo) venta.tasaParalelo = estado.tasasRef.paralelo.valor;
+    if (estado.tasas.eur) venta.tasaEur = estado.tasas.eur.valor;
+    if (estado.tasas.paralelo) venta.tasaParalelo = estado.tasas.paralelo.valor;
     if (r.restanteBs > 0) venta.canalBs = estado.canalBs;
     if (hayCarrito()) venta.items = itemsCarrito();
 
@@ -866,7 +915,8 @@
     pagoEncontrado = null;
     var monto = cent(venta.restanteBs);
     poner(el.cobroPmMonto, bs(monto));
-    poner(el.cobroPmEquivale, 'Equivale a ' + usd(cent(venta.restanteUsd)) + (venta.efectivoUsd > 0 ? ' · el resto se pagó en efectivo' : ''));
+    poner(el.cobroPmEquivale, 'Equivale a ' + usd(cent(venta.restanteUsd)) + ' · ' + nombreTasa(venta.tasaTipo) + ' ' + fmtTasa.format(venta.tasa) +
+      (venta.efectivoUsd > 0 ? ' · el resto se pagó en efectivo' : ''));
     var datos = datosPagoMovil();
     el.cobroPmDatos.hidden = !datos;
     el.cobroPmBotones.hidden = !datos;
@@ -1337,10 +1387,12 @@
     });
     lineas.push(
       ['Total USD', usd(d.totalUsd)],
-      ['Tasa BCV', 'Bs ' + fmtTasa.format(v.tasa) + ' por USD']
+      [nombreTasa(v.tasaTipo) + ' (cobro)', 'Bs ' + fmtTasa.format(v.tasa) + ' por USD']
     );
-    if (v.tasaEur) lineas.push(['Tasa EUR', 'Bs ' + fmtTasa.format(v.tasaEur) + ' por EUR']);
-    if (v.tasaParalelo) lineas.push(['Tasa Binance', 'Bs ' + fmtTasa.format(v.tasaParalelo) + ' por USDT']);
+    // Las demás tasas del momento, como referencia (sin repetir la de cobro).
+    var tipo = tipoTasa(v.tasaTipo);
+    if (v.tasaEur && tipo !== 'eur') lineas.push(['Tasa Euro', 'Bs ' + fmtTasa.format(v.tasaEur) + ' por EUR']);
+    if (v.tasaParalelo && tipo !== 'paralelo') lineas.push(['Tasa Binance', 'Bs ' + fmtTasa.format(v.tasaParalelo) + ' por USDT']);
     lineas.push(['Total en Bs', bs(d.totalBs)]);
     if (d.efectivo > 0) lineas.push(['Pagado en USD (efectivo)', usd(d.efectivo)]);
     if (d.restanteBs > 0) lineas.push(['Pagado en Bs (' + NOMBRE_CANAL[d.canal] + ')', bs(d.restanteBs)]);
@@ -1444,7 +1496,7 @@
       },
       items: items,
       totales: [
-        ['Tasa BCV', 'Bs ' + fmtTasa.format(v.tasa) + ' por USD'],
+        [nombreTasa(v.tasaTipo), 'Bs ' + fmtTasa.format(v.tasa) + ' por USD'],
         ['Total en Bs', bs(d.totalBs)],
         ['Total USD', usd(d.totalUsd), true]
       ],
@@ -1726,6 +1778,7 @@
       recibidoUsd: 0, vueltoUsd: 0, efectivoUsd: 0,
       bancoBs: 0, bancoUsd: 0, pagoMovilBs: 0, puntoBs: 0, porVerificar: 0, porVerificarBs: 0,
       totalUsd: 0, totalBs: 0,
+      tasas: {},           // tipo → { ventas, min, max }: con qué tasas se cobró
       desde: null, hasta: null
     };
     ventas.forEach(function (v) {
@@ -1742,6 +1795,11 @@
         r.fiadoUsd += d.fiadoUsd;
         r.totalUsd += d.totalUsd;
         r.totalBs += d.totalBs;
+        var tipo = tipoTasa(v.tasaTipo), valor = Number(v.tasa) || 0;
+        var t = r.tasas[tipo] || (r.tasas[tipo] = { ventas: 0, min: valor, max: valor });
+        t.ventas++;
+        t.min = Math.min(t.min, valor);
+        t.max = Math.max(t.max, valor);
       }
       r.recibidoUsd += d.efectivo;
       r.vueltoUsd += d.vueltoUsd;
@@ -1752,6 +1810,19 @@
     });
     r.efectivoUsd = r.recibidoUsd - r.vueltoUsd;
     return r;
+  }
+
+  /**
+   * "Tasa Binance 42,10" o, si hubo varias, "Tasa Binance 41,80–42,10 · Tasa BCV 36,50".
+   * Cierres guardados antes de elegir tasa no traen `tasas`: todos se cobraron con la BCV.
+   */
+  function textoTasas(r) {
+    var tasas = r.tasas;
+    if (!tasas) return r.cantidad ? nombreTasa('bcv') : '';
+    return TIPOS_TASA.filter(function (t) { return tasas[t]; }).map(function (tipo) {
+      var t = tasas[tipo];
+      return nombreTasa(tipo) + ' ' + (t.min === t.max ? fmtTasa.format(t.min) : fmtTasa.format(t.min) + '–' + fmtTasa.format(t.max));
+    }).join(' · ');
   }
 
   function textoPeriodo(r) {
@@ -1796,7 +1867,7 @@
       '',
       '*Total general:* ' + usd(r.totalUsd),
       '  Equivale a ' + bs(r.totalBs)
-    ]);
+    ], textoTasas(r) ? ['  Tasa de cobro: ' + textoTasas(r)] : []);
     return t.join('\n');
   }
 
@@ -1829,6 +1900,8 @@
       : 'Vendido sin cobrar todavía');
     poner(el.cierreTotal, usd(r.totalUsd));
     poner(el.cierreTotalDetalle, 'Equivale a ' + bs(r.totalBs) + ' a la tasa de cada venta');
+    // Con qué tasa se cobró; sin ventas, la tasa con la que se está cobrando ahora.
+    poner(el.cierreTasa, textoTasas(r) || etiquetaTasaActiva());
 
     var vacio = r.cantidad === 0 && r.anuladas === 0 && !r.abonos;
     el.cierreWhatsapp.href = vacio ? '#' : 'https://wa.me/?text=' + encodeURIComponent(mensajeCierre(r));
@@ -1882,7 +1955,7 @@
       bancoBs: r.bancoBs / 100, bancoUsd: r.bancoUsd / 100,
       pagoMovilBs: r.pagoMovilBs / 100, puntoBs: r.puntoBs / 100, porVerificar: r.porVerificar, porVerificarBs: r.porVerificarBs / 100,
       fiadoUsd: r.fiadoUsd / 100, abonos: r.abonos, abonosUsd: r.abonosUsd / 100,
-      totalUsd: r.totalUsd / 100, totalBs: r.totalBs / 100
+      totalUsd: r.totalUsd / 100, totalBs: r.totalBs / 100, tasas: r.tasas
     };
     var ids = cierreActual.ventas.map(function (v) { return v.id; });
     DB.archivarVentas(ids, resumen).then(function () {
@@ -1912,7 +1985,8 @@
     var r = {
       cantidad: Number(c.cantidad) || 0, anuladas: Number(c.anuladas) || 0, diasAnteriores: 0,
       metodos: Object.assign({ efectivo: 0, mixto: 0, 'pago-movil': 0, punto: 0, fiado: 0 }, c.metodos || {}),
-      desde: c.desde || null, hasta: c.hasta || null, porVerificar: Number(c.porVerificar) || 0, abonos: Number(c.abonos) || 0
+      desde: c.desde || null, hasta: c.hasta || null, porVerificar: Number(c.porVerificar) || 0, abonos: Number(c.abonos) || 0,
+      tasas: c.tasas && typeof c.tasas === 'object' ? c.tasas : null
     };
     ['recibidoUsd', 'vueltoUsd', 'efectivoUsd', 'bancoBs', 'bancoUsd', 'puntoBs', 'porVerificarBs', 'totalUsd', 'totalBs', 'fiadoUsd', 'abonosUsd'].forEach(function (k) {
       r[k] = cent(c[k]);
@@ -1994,6 +2068,7 @@
       ['Total general', usd(r.totalUsd)],
       ['Total en Bs', bs(r.totalBs)]
     );
+    if (textoTasas(r)) lineas.push(['Tasa de cobro', textoTasas(r)]);
     el.historialDetalle.innerHTML = '';
     lineas.forEach(function (l) {
       var dt = document.createElement('dt');
@@ -2223,7 +2298,7 @@
       estado.clientes.forEach(function (c) { if (saldos[c.id] > 0) { total += saldos[c.id]; deben++; } });
       poner(el.fiadoTotal, usd(total));
       poner(el.fiadoTotalDetalle, deben
-        ? plural(deben, 'cliente debe', 'clientes deben') + (estado.tasa ? ' · ' + bs(aBsCentavos(total, estado.tasa.valor)) + ' a la tasa de hoy' : '')
+        ? plural(deben, 'cliente debe', 'clientes deben') + (tasaActiva() ? ' · ' + bs(aBsCentavos(total, tasaActiva().valor)) + ' a la ' + nombreTasa(estado.tasaCobro) + ' de hoy' : '')
         : 'Nadie te debe. ¡Caja sana!');
       var q = normalizar(el.fiadoBuscar.value);
       var lista = estado.clientes.filter(function (c) { return !q || normalizar(c.nombre).indexOf(q) !== -1; })
@@ -2320,7 +2395,7 @@
 
   function textoRecordatorio(c, saldo) {
     var t = encabezadoComercio('Recordatorio de cuenta').concat(['', 'Hola, ' + c.nombre + '.',
-      'Tu saldo pendiente es de *' + usd(saldo) + '*' + (estado.tasa ? ' (' + bs(aBsCentavos(saldo, estado.tasa.valor)) + ' a la tasa BCV de hoy).' : '.')]);
+      'Tu saldo pendiente es de *' + usd(saldo) + '*' + (tasaActiva() ? ' (' + bs(aBsCentavos(saldo, tasaActiva().valor)) + ' a la ' + nombreTasa(estado.tasaCobro) + ' de hoy).' : '.')]);
     var d = datosPagoMovil();
     if (d) { t.push('', 'Puedes pagar por Pago Móvil:'); d.forEach(function (l) { t.push(l[0] + ': ' + l[1]); }); }
     t.push('', '¡Gracias!');
@@ -2357,7 +2432,7 @@
       poner(el.clienteTitulo, c.nombre);
       poner(el.clienteTelefono, c.telefono || 'Sin teléfono');
       poner(el.clienteSaldo, usd(Math.max(0, saldo)));
-      poner(el.clienteSaldoBs, saldo > 0 ? (estado.tasa ? 'Equivale a ' + bs(aBsCentavos(saldo, estado.tasa.valor)) + ' a la tasa de hoy' : '') : 'Cuenta al día');
+      poner(el.clienteSaldoBs, saldo > 0 ? (tasaActiva() ? 'Equivale a ' + bs(aBsCentavos(saldo, tasaActiva().valor)) + ' a la ' + nombreTasa(estado.tasaCobro) + ' de hoy' : '') : 'Cuenta al día');
       el.clienteWhatsapp.hidden = saldo <= 0;
       el.clienteWhatsapp.href = enlaceWhatsAppA(c.telefono, textoRecordatorio(c, saldo));
       el.clienteAbono.hidden = saldo <= 0;
@@ -2392,8 +2467,8 @@
       b.setAttribute('aria-checked', String(b.getAttribute('data-abono') === metodoAbono));
     });
     var monto = Math.round(parsearTasa(el.clienteAbonoMonto.value) * 100);
-    poner(el.clienteAbonoEquivale, metodoAbono !== 'efectivo' && monto > 0 && estado.tasa
-      ? 'El cliente paga ' + bs(aBsCentavos(monto, estado.tasa.valor)) + ' a la tasa BCV de hoy.' : '');
+    poner(el.clienteAbonoEquivale, metodoAbono !== 'efectivo' && monto > 0 && tasaActiva()
+      ? 'El cliente paga ' + bs(aBsCentavos(monto, tasaActiva().valor)) + ' a la ' + etiquetaTasaActiva() + '.' : '');
   }
 
   function registrarAbono(e) {
@@ -2405,12 +2480,12 @@
     var monto = Math.round(parsearTasa(el.clienteAbonoMonto.value) * 100);
     if (!(monto > 0)) { mensajeCliente('Escribe el monto del abono en dólares.', 'error'); return; }
     if (monto > saldo) { mensajeCliente('El abono es mayor que lo que debe (' + usd(saldo) + ').', 'error'); return; }
-    if (!estado.tasa) { mensajeCliente('Falta la tasa BCV del día.', 'error'); return; }
-    var tasa = estado.tasa.valor;
+    if (!tasaActiva()) { mensajeCliente('Falta la ' + nombreTasa(estado.tasaCobro) + ': toca «Editar Tasas» en la Caja.', 'error'); return; }
+    var tasa = tasaActiva().valor;
     var enBs = metodoAbono !== 'efectivo';
     var abono = {
       tipo: 'abono', clienteId: c.id, clienteNombre: c.nombre,
-      fecha: new Date().toISOString(), tasa: tasa,
+      fecha: new Date().toISOString(), tasa: tasa, tasaTipo: estado.tasaCobro,
       totalUsd: monto / 100, totalBs: aBsCentavos(monto, tasa) / 100,
       efectivoUsd: enBs ? 0 : monto / 100, recibidoUsd: enBs ? 0 : monto / 100,
       vueltoUsd: 0, vueltoBs: 0,
@@ -2432,6 +2507,7 @@
       el.clienteComprobante.hidden = false;
       renderVentas();
       if (vistaActual === 'fiado') pintarFiado();
+      if (vistaActual === 'resumen') pintarDashboard();
     }).catch(function (err) {
       console.error(err);
       mensajeCliente('No se pudo registrar el abono. Intenta de nuevo.', 'error');
@@ -2622,10 +2698,11 @@
     datosPin(pin).then(function (p) {
       Object.assign(cambios, p);
       // Si es la misma que llegó sola, se conserva su fuente.
-      if (estado.tasa && Math.abs(estado.tasa.valor - tasa) < 1e-9) return estado.tasa;
+      var bcv = estado.tasas.bcv;
+      if (bcv && Math.abs(bcv.valor - tasa) < 1e-9) return bcv;
       return DB.guardarTasa(tasa, 'bcv');
     }).then(function (t) {
-      estado.tasa = t;
+      estado.tasas.bcv = t;
       return DB.guardarAjustes(cambios);
     }).then(function (a) {
       estado.comercio = a;
@@ -2635,6 +2712,8 @@
       mostrarTasa();
       recalcular();
       irA('caja');
+      // Una sola vez, al estrenar la cuenta: dónde quedan sus datos. Siempre visible luego en Ajustes.
+      if (el.privacidad && !el.privacidad.open) el.privacidad.showModal();
     }).catch(function (err) {
       console.error(err);
       mensajeRegistro('No se pudo crear la cuenta. Intenta de nuevo.');
@@ -3098,22 +3177,30 @@
       b.setAttribute('aria-checked', String(b.getAttribute('data-periodo') === periodo));
     });
     poner(el.dashboardPeriodo, periodo === 'hoy' ? 'Hoy, ' + diaLegible(DB.diaLocal(hoy)) : diaLegible(DB.diaLocal(inicio)) + ' al ' + diaLegible(DB.diaLocal(hoy)));
-    return DB.ventasEntre(DB.diaLocal(inicio), DB.diaLocal(hoy)).then(function (todas) {
-      var validas = todas.filter(function (v) { return !v.anuladaEn; });
-      var r = resumirCierre(validas);
-      // El gráfico y "Cómo te pagaron" son de ventas: los abonos de fiado no cuentan.
-      var ventas = validas.filter(function (v) { return v.tipo !== 'abono'; });
-      pintarKpis(r);
+    // Se lee también el período anterior del mismo largo (ayer, los 7 o 30 días previos) para comparar.
+    var inicioAnterior = sumarDias(inicio, -dias);
+    var diaInicio = DB.diaLocal(inicio);
+    return Promise.all([DB.ventasEntre(DB.diaLocal(inicioAnterior), DB.diaLocal(hoy)), cargarFiado()]).then(function (res) {
+      var validas = res[0].filter(function (v) { return !v.anuladaEn; });
+      var actuales = validas.filter(function (v) { return v.dia >= diaInicio; });
+      var anteriores = validas.filter(function (v) { return v.dia < diaInicio; });
+      var r = resumirCierre(actuales);
+      // El gráfico, los métodos y los productos son de ventas: los abonos de fiado no cuentan.
+      var ventas = actuales.filter(function (v) { return v.tipo !== 'abono'; });
+      pintarKpis(r, resumirCierre(anteriores), periodo);
       pintarGrafico(ventas, periodo, inicio, dias);
       pintarMetodos(ventas, r);
       pintarTopProductos(ventas);
+      pintarStockBajo();
+      pintarFiadoDash(res[1]);
     }).catch(function (e) {
       console.error(e);
       poner(el.dashLectura, 'No se pudieron leer las ventas.');
     });
   }
 
-  function tile(etiqueta, valor, detalle, tono) {
+  /** `cambio` opcional { texto, sube: true|false|null } se pinta como una insignia con flecha. */
+  function tile(etiqueta, valor, detalle, tono, cambio) {
     var d = document.createElement('div');
     d.className = 'dash-kpi';
     if (tono) d.setAttribute('data-tono', tono);
@@ -3121,21 +3208,43 @@
     d.children[0].textContent = etiqueta;
     d.children[1].textContent = valor;
     d.children[2].textContent = detalle || '';
+    if (cambio) {
+      var c = document.createElement('span');
+      c.className = 'dash-cambio';
+      c.setAttribute('data-sube', cambio.sube === null ? 'igual' : String(cambio.sube));
+      c.textContent = cambio.texto;
+      d.appendChild(c);
+    }
     return d;
   }
 
-  function pintarKpis(r) {
+  var NOMBRE_ANTERIOR = { hoy: 'ayer', '7': 'los 7 días previos', '30': 'los 30 días previos' };
+
+  /** Comparación con el período anterior: "▲ 12 % vs ayer", "▼ 5 % …", "= Igual que ayer" o "▲ Nuevo: antes no hubo". */
+  function cambioContra(actual, anterior, periodo) {
+    var contra = NOMBRE_ANTERIOR[periodo];
+    if (!anterior && !actual) return { texto: 'Sin ventas, igual que ' + contra, sube: null };
+    if (!anterior) return { texto: '▲ Nuevo: antes no hubo', sube: true };
+    var pct = Math.round((actual - anterior) / anterior * 100);
+    if (pct === 0) return { texto: '= Igual que ' + contra, sube: null };
+    return { texto: (pct > 0 ? '▲ ' : '▼ ') + Math.abs(pct) + ' % vs ' + contra, sube: pct > 0 };
+  }
+
+  function pintarKpis(r, ant, periodo) {
     el.dashKpis.innerHTML = '';
     var promedio = r.cantidad ? Math.round(r.totalUsd / r.cantidad) : 0;
-    el.dashKpis.appendChild(tile('Vendido', usd(r.totalUsd), bs(r.totalBs)));
-    el.dashKpis.appendChild(tile('Ventas', String(r.cantidad), r.cantidad ? 'Ticket promedio ' + usd(promedio) : 'Sin ventas'));
+    var promedioAnt = ant.cantidad ? Math.round(ant.totalUsd / ant.cantidad) : 0;
+    el.dashKpis.appendChild(tile('Ventas del período', usd(r.totalUsd), bs(r.totalBs), null, cambioContra(r.totalUsd, ant.totalUsd, periodo)));
+    el.dashKpis.appendChild(tile('Número de ventas', String(r.cantidad), 'Antes: ' + ant.cantidad, null, cambioContra(r.cantidad, ant.cantidad, periodo)));
+    el.dashKpis.appendChild(tile('Ticket promedio', usd(promedio), 'Antes: ' + usd(promedioAnt), null,
+      r.cantidad || ant.cantidad ? cambioContra(promedio, promedioAnt, periodo) : null));
     el.dashKpis.appendChild(tile('Efectivo neto', usd(r.efectivoUsd), 'Recibido menos vuelto'));
     el.dashKpis.appendChild(tile('Banco', bs(r.bancoBs), r.puntoBs ? 'Punto ' + bs(r.puntoBs) : 'Pago Móvil'));
     el.dashKpis.appendChild(r.porVerificar
       ? tile('Por verificar', String(r.porVerificar), bs(r.porVerificarBs) + ' en Pago Móvil', 'aviso')
       : tile('Pago Móvil', '✓', 'Todo verificado'));
     if (r.fiadoUsd || r.abonosUsd) {
-      el.dashKpis.appendChild(tile('Fiado', usd(r.fiadoUsd), r.abonosUsd ? 'Abonos cobrados ' + usd(r.abonosUsd) : 'Sin abonos en el período', 'fiado'));
+      el.dashKpis.appendChild(tile('Fiado en el período', usd(r.fiadoUsd), r.abonosUsd ? 'Abonos cobrados ' + usd(r.abonosUsd) : 'Sin abonos en el período', 'fiado'));
     }
   }
 
@@ -3239,6 +3348,7 @@
     if (tono) li.children[2].setAttribute('data-tono', tono);
     li.children[3].textContent = detalle;
     lista.appendChild(li);
+    return li;
   }
 
   function pintarMetodos(ventas, r) {
@@ -3249,8 +3359,11 @@
       if (d.canal === 'punto') punto += d.restanteUsd; else movil += d.restanteUsd;
       fiado += d.fiadoUsd;
     });
+    efectivo = Math.max(0, efectivo);
     var total = Math.max(1, efectivo + movil + punto + fiado);
     el.dashMetodos.innerHTML = '';
+    el.dashMetodosBarra.innerHTML = '';
+    el.dashMetodosBarra.hidden = !r.cantidad;
     if (!r.cantidad) {
       var vacio = document.createElement('li');
       vacio.className = 'venta-vacia';
@@ -3258,10 +3371,23 @@
       el.dashMetodos.appendChild(vacio);
       return;
     }
-    [['Efectivo USD', efectivo, null], ['Pago Móvil', movil, 'bs'], ['Punto de venta', punto, 'bs'], ['Fiado', fiado, 'fiado']].forEach(function (m) {
-      if (!m[1] && (m[0] === 'Punto de venta' || m[0] === 'Fiado')) return;
-      fila(el.dashMetodos, m[0], usd(m[1]), Math.round(m[1] / total * 100) + '%', m[1] / total, m[2]);
+    // Cada método tiene su color fijo (no cambia con el orden ni con el período).
+    var metodos = [['Efectivo USD', efectivo, 'efectivo'], ['Pago Móvil', movil, 'pago-movil'], ['Punto de venta', punto, 'punto'], ['Fiado', fiado, 'fiado']]
+      .filter(function (m) { return m[1] > 0; });
+    var etiqueta = [];
+    metodos.forEach(function (m) {
+      var pct = Math.round(m[1] / total * 100);
+      var seg = document.createElement('span');
+      seg.setAttribute('data-metodo', m[2]);
+      seg.style.flexGrow = String(m[1]);
+      seg.title = m[0] + ': ' + usd(m[1]) + ' (' + pct + ' %)';
+      el.dashMetodosBarra.appendChild(seg);
+      etiqueta.push(m[0] + ' ' + pct + ' %');
+      var li = fila(el.dashMetodos, m[0], usd(m[1]), pct + ' % de lo vendido', m[1] / total, null);
+      li.classList.add('dash-fila-leyenda');
+      li.setAttribute('data-metodo', m[2]);
     });
+    el.dashMetodosBarra.setAttribute('aria-label', 'Ventas por método de pago: ' + etiqueta.join(', '));
   }
 
   function pintarTopProductos(ventas) {
@@ -3274,13 +3400,76 @@
         por[k].usd += Math.round(cent(it.precioUsd) * it.cantidad);
       });
     });
+    var porDinero = estado.dashOrden === 'dinero';
+    Array.prototype.forEach.call(el.dashProductosOrden.querySelectorAll('[data-orden]'), function (b) {
+      b.setAttribute('aria-checked', String(b.getAttribute('data-orden') === estado.dashOrden));
+    });
+    var medida = function (p) { return porDinero ? p.usd : p.cantidad; };
     var top = Object.keys(por).map(function (k) { return por[k]; })
-      .sort(function (a, b) { return b.usd - a.usd; }).slice(0, 5);
+      .sort(function (a, b) { return medida(b) - medida(a) || b.usd - a.usd; }).slice(0, 5);
     el.dashProductosBloque.hidden = !top.length;
     el.dashProductos.innerHTML = '';
-    var max = top.length ? top[0].usd : 1;
-    top.forEach(function (p) {
-      fila(el.dashProductos, p.nombre, usd(p.usd), fmtCantidad(p.cantidad) + (p.cantidad === 1 ? ' unidad' : ' unidades'), p.usd / max);
+    var max = top.length ? medida(top[0]) || 1 : 1;
+    var unidades = function (p) { return fmtCantidad(p.cantidad) + (p.cantidad === 1 ? ' unidad' : ' unidades'); };
+    top.forEach(function (p, i) {
+      fila(el.dashProductos, (i + 1) + '. ' + p.nombre, porDinero ? usd(p.usd) : unidades(p),
+        porDinero ? unidades(p) : 'Dejaron ' + usd(p.usd), medida(p) / max);
+    });
+    ultimasVentasDash = ventas;
+  }
+  var ultimasVentasDash = [];
+
+  /** Productos con control de stock y 5 unidades o menos, del más escaso al menos. */
+  var STOCK_BAJO = 5;
+  function pintarStockBajo() {
+    var bajos = estado.catalogo.filter(function (p) { return p.stock != null && p.stock <= STOCK_BAJO; })
+      .sort(function (a, b) { return a.stock - b.stock || a.nombre.localeCompare(b.nombre, 'es'); });
+    var conStock = estado.catalogo.some(function (p) { return p.stock != null; });
+    el.dashStockBloque.hidden = !conStock;
+    el.dashStock.innerHTML = '';
+    if (!bajos.length) {
+      var ok = document.createElement('li');
+      ok.className = 'dash-stock-ok';
+      ok.textContent = '✓ Todo tiene más de ' + STOCK_BAJO + ' unidades.';
+      el.dashStock.appendChild(ok);
+      return;
+    }
+    bajos.slice(0, 8).forEach(function (p) {
+      var li = document.createElement('li');
+      li.className = 'dash-stock-fila';
+      li.innerHTML = '<span class="dash-stock-nombre"></span><span class="dash-stock-estado"></span>';
+      li.children[0].textContent = p.nombre;
+      var agotado = p.stock <= 0;
+      li.children[1].setAttribute('data-estado', agotado ? 'agotado' : 'bajo');
+      li.children[1].textContent = agotado ? '✕ Agotado' : '! Quedan ' + fmtCantidad(p.stock);
+      el.dashStock.appendChild(li);
+    });
+    if (bajos.length > 8) {
+      var mas = document.createElement('li');
+      mas.className = 'dash-stock-ok';
+      mas.textContent = 'Y ' + plural(bajos.length - 8, 'producto más', 'productos más') + ' en Inventario.';
+      el.dashStock.appendChild(mas);
+    }
+  }
+
+  /** Fiado de todos los días: lo que falta por cobrar y quiénes deben más. */
+  function pintarFiadoDash(saldos) {
+    var deudores = estado.clientes.filter(function (c) { return saldos[c.id] > 0; })
+      .sort(function (a, b) { return saldos[b.id] - saldos[a.id]; });
+    var total = deudores.reduce(function (s, c) { return s + saldos[c.id]; }, 0);
+    el.dashFiadoBloque.hidden = !estado.clientes.length;
+    poner(el.dashFiadoTotal, usd(total));
+    poner(el.dashFiadoDetalle, deudores.length
+      ? plural(deudores.length, 'cliente debe', 'clientes deben') + (tasaActiva() ? ' · ' + bs(aBsCentavos(total, tasaActiva().valor)) + ' a la ' + nombreTasa(estado.tasaCobro) : '')
+      : 'Nadie te debe. ¡Caja sana!');
+    el.dashFiado.innerHTML = '';
+    var max = deudores.length ? saldos[deudores[0].id] : 1;
+    deudores.slice(0, 5).forEach(function (c) {
+      var li = fila(el.dashFiado, c.nombre, usd(saldos[c.id]), Math.round(saldos[c.id] / Math.max(1, total) * 100) + ' % de lo fiado · Toca para cobrar', saldos[c.id] / max, 'fiado');
+      li.setAttribute('data-cliente', String(c.id));
+      li.setAttribute('role', 'button');
+      li.tabIndex = 0;
+      li.classList.add('dash-fila-toque');
     });
   }
 
@@ -3305,11 +3494,16 @@
     // En iOS Safari, :active solo se pinta al tocar si existe algún oyente de touchstart.
     document.addEventListener('touchstart', function () {}, { passive: true });
     // Tocar fuera del recuadro cierra cualquier modal.
-    [el.tasas, el.historial, el.anular, el.cobroPm, el.verificar, el.productos, el.fiar, el.cliente].forEach(function (d) {
+    if (el.privacidad) el.privacidadOk.addEventListener('click', function () { el.privacidad.close(); });
+    [el.tasas, el.historial, el.anular, el.cobroPm, el.verificar, el.productos, el.fiar, el.cliente, el.privacidad].forEach(function (d) {
       if (d) d.addEventListener('click', function (e) { if (e.target === d) d.close(); });
     });
     if (el.tasas) {
       el.editarTasas.addEventListener('click', abrirTasas);
+      if (el.elegirTasa) el.elegirTasa.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-tasa]');
+        if (b) elegirTasaCobro(b.getAttribute('data-tasa'));
+      });
       el.tasasCerrar.addEventListener('click', function () { el.tasas.close(); });
       el.tasasForm.addEventListener('submit', guardarTasas);
     }
@@ -3457,6 +3651,16 @@
         var b = e.target.closest('[data-periodo]');
         if (b) { estado.dashPeriodo = b.getAttribute('data-periodo'); pintarDashboard(); }
       });
+      el.dashProductosOrden.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-orden]');
+        if (b) { estado.dashOrden = b.getAttribute('data-orden'); pintarTopProductos(ultimasVentasDash); }
+      });
+      var abrirDeudor = function (e) {
+        var li = e.target.closest('[data-cliente]');
+        if (li && (e.type === 'click' || e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); abrirCliente(li.getAttribute('data-cliente')); }
+      };
+      el.dashFiado.addEventListener('click', abrirDeudor);
+      el.dashFiado.addEventListener('keydown', abrirDeudor);
       el.dashGrafico.addEventListener('click', function (e) {
         var g = e.target.closest('[data-barra]');
         leerBarra(g ? Number(g.getAttribute('data-barra')) : null);
@@ -3575,12 +3779,15 @@
     el = {
       marcaLogo: $('#marca-logo'),
       marcaNombre: $('#marca-nombre'),
+      privacidad: $('#privacidad'),
+      privacidadOk: $('#privacidad-ok'),
+      tasaTitulo: $('#tasa-titulo'),
+      elegirTasa: $('#elegir-tasa'),
+      cobroTasa: $('#cobro-tasa'),
+      cierreTasa: $('#cierre-tasa'),
+      tasaManualInput: $('#tasa-manual-input'),
       tasaActual: $('#tasa-actual'),
       tasaFecha: $('#tasa-fecha'),
-      tasaEur: $('#tasa-eur'),
-      tasaEurFecha: $('#tasa-eur-fecha'),
-      tasaParalelo: $('#tasa-paralelo'),
-      tasaParaleloFecha: $('#tasa-paralelo-fecha'),
       editarTasas: $('#editar-tasas'),
       tasas: $('#tasas'),
       tasasForm: $('#tasas-form'),
@@ -3738,6 +3945,14 @@
       dashLectura: $('#dash-lectura'),
       dashMetodos: $('#dash-metodos'),
       dashProductosBloque: $('#dash-productos-bloque'),
+      dashProductosOrden: $('#dash-productos-orden'),
+      dashMetodosBarra: $('#dash-metodos-barra'),
+      dashStockBloque: $('#dash-stock-bloque'),
+      dashStock: $('#dash-stock'),
+      dashFiadoBloque: $('#dash-fiado-bloque'),
+      dashFiadoTotal: $('#dash-fiado-total'),
+      dashFiadoDetalle: $('#dash-fiado-detalle'),
+      dashFiado: $('#dash-fiado'),
       dashProductos: $('#dash-productos'),
       cobroPm: $('#cobro-pm'),
       cobroPmForm: $('#cobro-pm-form'),
@@ -3889,8 +4104,8 @@
       .then(function () { return Promise.all([DB.obtenerTasas(), DB.obtenerAjustes()]); })
       .then(function (res) {
         var t = res[0], a = res[1];
-        estado.tasa = t.bcv;
-        estado.tasasRef = { eur: t.eur, paralelo: t.paralelo };
+        estado.tasas = t;
+        estado.tasaCobro = tipoTasa(a.tasaCobro);
         estado.comercio = a;
         // IndexedDB manda: si la copia de localStorage se perdió o difiere, se corrige aquí.
         if (a.tema) aplicarTema(a.tema, a.colores);

@@ -351,6 +351,59 @@ h1, h2, p { margin: 0; }
 .tasa-sec-fecha { font-size: .75rem; color: var(--texto-suave); }
 .tasa-sec-fecha:empty { display: none; }
 
+/* Elegir la tasa de cobro: un toque en la pizarra */
+.elegir-tasa { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.tasa-opcion {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  min-height: var(--toque);
+  padding: 9px 12px;
+  border: 1.5px solid var(--linea);
+  border-radius: var(--radio-control);
+  background: color-mix(in srgb, var(--texto) 3%, transparent);
+  color: var(--texto);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s var(--suave), background-color .15s var(--suave), box-shadow .15s var(--suave);
+}
+.tasa-opcion:active { transform: scale(.98); }
+.tasa-opcion:focus-visible { outline: 3px solid var(--primario); outline-offset: 2px; }
+.tasa-opcion-nombre { font-size: .78rem; font-weight: 650; color: var(--texto-suave); }
+.tasa-opcion-valor { font-size: 1.15rem; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.tasa-opcion-fecha { max-width: 100%; overflow: hidden; font-size: .72rem; color: var(--texto-suave); white-space: nowrap; text-overflow: ellipsis; }
+.tasa-opcion-fecha:empty { display: none; }
+.tasa-opcion[aria-checked="true"] {
+  border-color: var(--primario);
+  background: var(--primario-suave);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primario) 14%, transparent);
+}
+.tasa-opcion[aria-checked="true"] .tasa-opcion-nombre { color: var(--primario-oscuro); }
+:root[data-tema="oscuro"] .tasa-opcion[aria-checked="true"] .tasa-opcion-nombre { color: var(--primario); }
+.tasa-opcion[aria-checked="true"] .tasa-opcion-nombre::before { content: "✓ "; }
+.elegir-tasa-nota { margin-top: 2px; font-size: .75rem; color: var(--texto-suave); }
+
+/* Etiqueta de la tasa de cobro junto a los Bs (Caja y Cierre) */
+.cobro-tasa {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--primario-suave);
+  color: var(--primario-oscuro);
+  font-size: .72rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+  vertical-align: middle;
+}
+:root[data-tema="oscuro"] .cobro-tasa { color: var(--primario); }
+.cobro-tasa:empty { display: none; }
+.cierre-tasa { align-self: flex-start; margin: 6px 0 0; padding: 4px 10px; border-radius: 10px; line-height: 1.35; }
+
 /* Calculadora */
 .pos-cabecera {
   display: flex;
@@ -540,6 +593,9 @@ h1, h2, p { margin: 0; }
 }
 .resultado-destacado .cifra-secundaria { color: inherit; font-weight: 700; opacity: .92; }
 .resultado-linea .cifra { font-size: 1.4rem; }
+.resultado-linea .cifra { white-space: nowrap; }
+.resultado-linea > .etiqueta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.resultado-linea .cobro-tasa { margin-left: 0; }
 .cifra-secundaria:empty { display: none; }
 
 .aviso {
@@ -879,6 +935,37 @@ h1, h2, p { margin: 0; }
 
 /* Respaldo en Ajustes */
 .respaldo { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--borde); }
+/* Privacidad: los datos viven solo en el teléfono */
+.privacidad {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--linea);
+  border-radius: var(--radio-control);
+  background: color-mix(in srgb, var(--primario) 7%, transparent);
+  font-size: .9rem;
+  line-height: 1.4;
+}
+.privacidad strong { display: block; margin-bottom: 2px; }
+.privacidad p + p { margin-top: 6px; }
+.privacidad-alerta { color: var(--fiado); font-weight: 600; }
+:root[data-tema="oscuro"] .privacidad-alerta { color: #fbbf24; }
+.privacidad-icono {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--primario-suave);
+  color: var(--primario-oscuro);
+}
+:root[data-tema="oscuro"] .privacidad-icono { color: var(--primario); }
+.privacidad-hoja { display: grid; justify-items: center; gap: 10px; padding-top: 20px; text-align: center; }
+.privacidad-hoja p { max-width: 32ch; line-height: 1.45; }
+.privacidad-icono-grande { width: 56px; height: 56px; }
+.privacidad-icono-grande .icono { width: 28px; height: 28px; }
 .respaldo-botones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .respaldo-botones .boton { padding: 0 8px; font-size: .95rem; text-align: center; }
 .respaldo-mensaje {
@@ -1283,6 +1370,92 @@ h1, h2, p { margin: 0; }
 .dash-fila-barra > span { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--primario-oscuro), var(--primario)); }
 .dash-fila-barra[data-tono="bs"] > span { background: linear-gradient(90deg, color-mix(in srgb, var(--bs) 75%, #000), var(--bs)); }
 .dash-fila-detalle { grid-column: 1 / -1; font-size: .8rem; color: var(--texto-suave); font-weight: 600; }
+
+/* Resumen: comparación con el período anterior, métodos, productos, stock y fiado */
+:root {
+  /* Colores fijos por método de pago (validados para daltonismo; no cambian con el tema de color). */
+  --metodo-efectivo: #047857;
+  --metodo-pago-movil: #1d4ed8;
+  --metodo-punto: #db2777;
+  --metodo-fiado: #b45309;
+}
+:root[data-tema="oscuro"] {
+  --metodo-efectivo: #0d9488;
+  --metodo-pago-movil: #3b82f6;
+  --metodo-punto: #ec4899;
+  --metodo-fiado: #d97706;
+}
+.dash-cambio {
+  justify-self: start;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--texto) 7%, transparent);
+  color: var(--texto-suave);
+  font-size: .76rem;
+  font-weight: 700;
+}
+.dash-cambio[data-sube="true"] { background: color-mix(in srgb, var(--exito) 14%, transparent); color: var(--exito); }
+.dash-cambio[data-sube="false"] { background: var(--peligro-suave); color: var(--peligro); }
+:root[data-tema="oscuro"] .dash-cambio[data-sube="true"] { color: #4ade80; }
+:root[data-tema="oscuro"] .dash-cambio[data-sube="false"] { background: rgba(248, 113, 113, .14); color: #fca5a5; }
+.dash-kpi:first-child .dash-cambio,
+:root[data-tema="oscuro"] .dash-kpi:first-child .dash-cambio[data-sube] { background: rgba(255, 255, 255, .22); color: inherit; }
+
+.dash-pila { display: flex; gap: 2px; height: 16px; border-radius: 8px; overflow: hidden; }
+.dash-pila[hidden] { display: none; }
+.dash-pila > span { min-width: 4px; flex-basis: 0; }
+[data-metodo="efectivo"] { --metodo: var(--metodo-efectivo); }
+[data-metodo="pago-movil"] { --metodo: var(--metodo-pago-movil); }
+[data-metodo="punto"] { --metodo: var(--metodo-punto); }
+[data-metodo="fiado"] { --metodo: var(--metodo-fiado); }
+.dash-pila > span { background: var(--metodo); }
+.dash-fila-leyenda .dash-fila-nombre::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 3px;
+  background: var(--metodo);
+  vertical-align: 0;
+}
+.dash-fila-leyenda .dash-fila-barra > span { background: var(--metodo); }
+
+.dash-bloque-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.segmentos-chicos { grid-template-columns: repeat(2, auto); }
+.segmentos-chicos .segmento { min-height: 34px; padding: 0 12px; font-size: .8rem; }
+
+.dash-stock { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.dash-stock-fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--linea);
+  border-radius: var(--radio-control);
+}
+.dash-stock-nombre { min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+.dash-stock-estado { flex: none; padding: 2px 10px; border-radius: 999px; font-size: .8rem; font-weight: 750; }
+.dash-stock-estado[data-estado="bajo"] { background: #fef3c7; color: #92400e; }
+.dash-stock-estado[data-estado="agotado"] { background: var(--peligro-suave); color: var(--peligro); }
+:root[data-tema="oscuro"] .dash-stock-estado[data-estado="bajo"] { background: #3b2a00; color: #fde68a; }
+:root[data-tema="oscuro"] .dash-stock-estado[data-estado="agotado"] { background: rgba(248, 113, 113, .14); color: #fca5a5; }
+.dash-stock-ok { font-size: .88rem; font-weight: 600; color: var(--texto-suave); }
+
+.dash-fiado-total {
+  display: grid;
+  gap: 2px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--fiado) 30%, transparent);
+  border-radius: 18px;
+  background: var(--fiado-suave);
+}
+.dash-fiado-total .dash-kpi-valor { color: var(--fiado); font-size: 1.8rem; }
+.dash-fila-toque { margin: -6px; padding: 6px; border-radius: 12px; cursor: pointer; }
+.dash-fila-toque:active { background: color-mix(in srgb, var(--texto) 6%, transparent); }
+.dash-fila-toque:focus-visible { outline: 3px solid var(--primario); outline-offset: 0; }
 .panel-cabecera { flex-direction: column; gap: 4px; }
 .menu-boton svg { box-sizing: content-box; width: 40px; height: 22px; padding: 3px 10px; border-radius: 999px; stroke-width: 1.8; transition: background-color .2s ease, box-shadow .2s ease; }
 .menu-boton[aria-current="page"] svg { background: color-mix(in srgb, var(--primario) 14%, transparent); }
